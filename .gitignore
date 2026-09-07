@@ -1,0 +1,15 @@
+node_modules/
+.env
+*.log
+.DS_Store
+Thumbs.db
+coverage/
+dist/
+.idea/
+.vscode/
+
+# Sensitive / private data — not for public repo
+# Exclude everything in Trenddata (real eHub CSVs), but allow fictional dummy data
+data/Trenddata/*
+!data/Trenddata/sample_orders_*.csv
+Prompt/

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DM Monitoring Dashboard</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/chatbot.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <h1 class="header-title">DM Monitoring Dashboard</h1>
+    </div>
+    <div class="header-right">
+      <button class="btn-export" id="exportPdfBtn" title="Export current tab to PDF">📄 Export PDF</button>
+      <span class="data-source-badge" id="dataSourceBadge">
+        <span class="badge-icon">📁</span>
+        <span class="badge-text">JSON Mode</span>
+      </span>
+      <span class="connection-status" id="connectionStatus">
+        <span class="status-dot connected"></span>
+        <span>Connected</span>
+      </span>
+      <span class="live-clock" id="liveClock"></span>
+    </div>
+  </header>
+
+  <!-- Tab Navigation -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-tab="overview">
+      <span class="tab-icon">🏠</span>
+      <span class="tab-label">Overview</span>
+    </button>
+    <button class="tab-btn" data-tab="trends">
+      <span class="tab-icon">📊</span>
+      <span class="tab-label">Trends</span>
+    </button>
+    <button class="tab-btn" data-tab="files">
+      <span class="tab-icon">📁</span>
+      <span class="tab-label">Files</span>
+    </button>
+    <button class="tab-btn" data-tab="alerts">
+      <span class="tab-icon">🔔</span>
+      <span class="tab-label">Alerts</span>
+    </button>
+    <button class="tab-btn" data-tab="insights">
+      <span class="tab-icon">🤖</span>
+      <span class="tab-label">AI Insights</span>
+    </button>
+  </nav>
+
+  <!-- Tab Content -->
+  <main class="content">
+    <!-- Overview Tab -->
+    <section class="tab-content active" id="tab-overview">
+      <div class="kpi-cards" id="kpiCards">
+        <div class="kpi-card">
+          <div class="kpi-value" id="kpiWorkflows">-</div>
+          <div class="kpi-label">Workflows</div>
+        </div>
+        <div class="kpi-card kpi-green">
+          <div class="kpi-value" id="kpiOnTime">-</div>
+          <div class="kpi-label">Completion Rate</div>
+        </div>
+        <div class="kpi-card kpi-yellow">
+          <div class="kpi-value" id="kpiDelayed">-</div>
+          <div class="kpi-label">In Progress (45)</div>
+        </div>
+        <div class="kpi-card kpi-red">
+          <div class="kpi-value" id="kpiMissing">-</div>
+          <div class="kpi-label">Errors (999)</div>
+        </div>
+        <div class="kpi-card kpi-purple">
+          <div class="kpi-value" id="kpiAlerts">-</div>
+          <div class="kpi-label">Total Documents</div>
+        </div>
+      </div>
+
+      <div class="overview-grid">
+        <div class="card">
+          <h3 class="card-title">Documents by Workflow</h3>
+          <div class="chart-container">
+            <canvas id="healthTimelineChart"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">AI Anomaly Summary</h3>
+          <div id="anomalySummary" class="anomaly-summary"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Recent Documents</h3>
+        <div class="table-container">
+          <table class="data-table" id="todayStatusTable">
+            <thead>
+              <tr>
+                <th>Workflow</th>
+                <th>File Name</th>
+                <th>Size (KB)</th>
+                <th>Received</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="todayStatusBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Trends Tab -->
+    <section class="tab-content" id="tab-trends">
+      <div class="filter-bar">
+        <div class="filter-group">
+          <label for="trendWorkflowSelect">Workflow:</label>
+          <select id="trendWorkflowSelect" class="filter-select"></select>
+        </div>
+        <div class="filter-group">
+          <label>Range:</label>
+          <div class="btn-group">
+            <button class="btn-sm" data-days="7">7d</button>
+            <button class="btn-sm active" data-days="14">14d</button>
+            <button class="btn-sm" data-days="30">30d</button>
+            <button class="btn-sm" data-days="90">90d</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="trends-grid">
+        <div class="card">
+          <h3 class="card-title">Arrival Time Trend</h3>
+          <div class="chart-container">
+            <canvas id="arrivalTrendChart"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">File Size Trend</h3>
+          <div class="chart-container">
+            <canvas id="sizeTrendChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">AI Insights</h3>
+        <div id="trendInsights" class="insights-text"></div>
+      </div>
+    </section>
+
+    <!-- Files Tab -->
+    <section class="tab-content" id="tab-files">
+      <div class="filter-bar">
+        <div class="filter-group">
+          <label for="fileWorkflowSelect">Workflow:</label>
+          <select id="fileWorkflowSelect" class="filter-select">
+            <option value="">All Workflows</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label for="fileDateFrom">From:</label>
+          <input type="date" id="fileDateFrom" class="filter-input">
+        </div>
+        <div class="filter-group">
+          <label for="fileDateTo">To:</label>
+          <input type="date" id="fileDateTo" class="filter-input">
+        </div>
+        <div class="filter-group">
+          <label for="fileStatusSelect">Status:</label>
+          <select id="fileStatusSelect" class="filter-select">
+            <option value="">All</option>
+          </select>
+        </div>
+        <button class="btn-primary" id="fileFilterBtn">Apply</button>
+      </div>
+
+      <div class="card">
+        <div class="table-container">
+          <table class="data-table" id="fileTable">
+            <thead>
+              <tr>
+                <th>Workflow</th>
+                <th>File Name</th>
+                <th>Size (KB)</th>
+                <th>Received</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="fileTableBody"></tbody>
+          </table>
+        </div>
+        <div class="pagination" id="filePagination"></div>
+      </div>
+
+      <!-- File detail expand panel -->
+      <div class="card file-detail-panel" id="fileDetailPanel" style="display:none;">
+        <h3 class="card-title">File Details</h3>
+        <div id="fileDetailContent"></div>
+      </div>
+    </section>
+
+    <!-- Alerts Tab -->
+    <section class="tab-content" id="tab-alerts">
+      <div class="filter-bar">
+        <div class="btn-group alert-filter-tabs">
+          <button class="btn-sm active" data-severity="">All</button>
+          <button class="btn-sm" data-severity="critical">🔴 Critical</button>
+          <button class="btn-sm" data-severity="warning">🟡 Warning</button>
+          <button class="btn-sm" data-severity="info">ℹ️ Info</button>
+        </div>
+      </div>
+
+      <div class="alerts-grid">
+        <div class="card alerts-list-card">
+          <h3 class="card-title">Alert List</h3>
+          <div id="alertsList" class="alerts-list"></div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Alert Statistics</h3>
+          <div id="alertStats" class="alert-stats"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- AI Insights Tab -->
+    <section class="tab-content" id="tab-insights">
+      <div class="card card-full">
+        <h3 class="card-title">📊 Workflow File Trend Analysis</h3>
+        <div class="filter-bar" style="margin-bottom:12px;padding:8px 12px;">
+          <div class="filter-group">
+            <label for="analysisWorkflowSelect">Workflow:</label>
+            <select id="analysisWorkflowSelect" class="filter-select"></select>
+          </div>
+        </div>
+        <div id="workflowAnalysis"></div>
+      </div>
+
+      <div class="insights-grid">
+        <div class="card card-full">
+          <h3 class="card-title">🤖 AI Summary</h3>
+          <div id="weeklySummary" class="summary-text"></div>
+        </div>
+      </div>
+
+      <!-- SLA Compliance -->
+      <div class="card" style="margin-top:16px;">
+        <h3 class="card-title">📋 SLA Compliance</h3>
+        <div id="slaCompliance"></div>
+      </div>
+
+      <!-- Week-over-Week -->
+      <div class="card" style="margin-top:16px;">
+        <h3 class="card-title">📈 Week-over-Week Comparison</h3>
+        <div id="weekOverWeek"></div>
+      </div>
+
+      <!-- Health Heatmap -->
+      <div class="card" style="margin-top:16px;">
+        <h3 class="card-title">🟩 Workflow Health Heatmap (Last 14 Days)</h3>
+        <div id="healthHeatmap" style="overflow-x:auto;"></div>
+      </div>
+
+      <!-- Trading Partner Activity -->
+      <div class="card" style="margin-top:16px;">
+        <h3 class="card-title">🤝 Trading Partner Activity</h3>
+        <div id="tradingPartners"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Chatbot -->
+  <div class="chatbot-toggle" id="chatbotToggle">
+    <span class="chatbot-icon">💬</span>
+    <span class="chatbot-badge" id="chatbotBadge" style="display:none;">0</span>
+  </div>
+
+  <div class="chatbot-panel" id="chatbotPanel">
+    <div class="chatbot-header">
+      <div class="chatbot-header-left">
+        <span class="chatbot-avatar">🤖</span>
+        <span class="chatbot-name">DM Assistant</span>
+      </div>
+      <button class="chatbot-minimize" id="chatbotMinimize">−</button>
+    </div>
+    <div class="chatbot-messages" id="chatbotMessages"></div>
+    <div class="chatbot-suggestions" id="chatbotSuggestions"></div>
+    <div class="chatbot-input-area">
+      <input type="text" id="chatbotInput" class="chatbot-input" placeholder="Ask about your pipelines..." autocomplete="off">
+      <button id="chatbotSend" class="chatbot-send-btn">➤</button>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/js/app.js"></script>
+  <script src="/js/socket.js"></script>
+  <script src="/js/charts.js"></script>
+  <script src="/js/dashboard.js"></script>
+  <script src="/js/trends.js"></script>
+  <script src="/js/fileExplorer.js"></script>
+  <script src="/js/alerts.js"></script>
+  <script src="/js/insights.js"></script>
+  <script src="/js/chatbot.js"></script>
+  <script src="/js/exportPdf.js"></script>
+</body>
+</html>
