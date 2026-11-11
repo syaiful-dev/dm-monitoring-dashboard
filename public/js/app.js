@@ -2,7 +2,7 @@
 // Handles tab navigation, clock, data source indicator, and app initialization
 
 const App = (() => {
-  let activeTab = 'overview';
+  let activeTab = 'alerts';
 
   // Tab navigation
   function initTabs() {
@@ -30,11 +30,28 @@ const App = (() => {
 
     // Load tab data
     switch (tab) {
-      case 'overview': Dashboard.load(); break;
-      case 'trends': Trends.load(); break;
-      case 'files': FileExplorer.load(); break;
       case 'alerts': Alerts.load(); break;
-      case 'insights': Insights.load(); break;
+      case 'trends': Trends.load(); Insights.load(); break;
+      case 'filedetails': if (window.FileDetails) FileDetails.load(); break;
+    }
+  }
+
+  // Alerts tab badge — shows count of active (new) missing-file alerts
+  async function updateAlertsBadge() {
+    try {
+      const data = await api('missing-alerts');
+      const active = data.summary ? data.summary.active : 0;
+      const badge = document.getElementById('alertsTabBadge');
+      if (badge) {
+        if (active > 0) {
+          badge.style.display = 'inline-flex';
+          badge.textContent = active > 99 ? '99+' : active;
+        } else {
+          badge.style.display = 'none';
+        }
+      }
+    } catch (err) {
+      console.error('Failed to update alerts badge:', err);
     }
   }
 
@@ -63,8 +80,11 @@ const App = (() => {
       if (badge) {
         const icon = badge.querySelector('.badge-icon');
         const text = badge.querySelector('.badge-text');
-        icon.textContent = '📁';
-        text.textContent = 'eHub CSV';
+        icon.textContent = data.sourceIcon || (data.source === 'db' ? '🗄️' : '📁');
+        text.textContent = data.sourceLabel || data.provider || 'Data Source';
+        if (data.connections && data.connections.length) {
+          badge.title = 'Sources: ' + data.connections.join(', ');
+        }
       }
     } catch (err) {
       console.error('Failed to fetch status:', err);
@@ -114,20 +134,57 @@ const App = (() => {
   }
 
   // API helper
-  async function api(endpoint) {
-    const res = await fetch(`/api/${endpoint}`);
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-    return res.json();
+  // ---- Global loading overlay ----
+  // Reference-counted so overlapping requests don't hide it too early. A short
+  // delay avoids a distracting flash for very fast calls.
+  let loaderCount = 0;
+  let loaderTimer = null;
+
+  function showLoader(text) {
+    loaderCount++;
+    const el = document.getElementById('appLoader');
+    if (!el) return;
+    const label = document.getElementById('appLoaderText');
+    if (label && text) label.textContent = text;
+    if (loaderTimer) return; // already scheduled/visible
+    loaderTimer = setTimeout(() => { el.classList.add('show'); el.setAttribute('aria-hidden', 'false'); }, 180);
   }
 
-  // Initialize app
+  function hideLoader() {
+    loaderCount = Math.max(0, loaderCount - 1);
+    if (loaderCount > 0) return; // other requests still running
+    if (loaderTimer) { clearTimeout(loaderTimer); loaderTimer = null; }
+    const el = document.getElementById('appLoader');
+    if (el) {
+      el.classList.remove('show');
+      el.setAttribute('aria-hidden', 'true');
+      const label = document.getElementById('appLoaderText');
+      if (label) label.textContent = 'Loading…';
+    }
+  }
+
+  // Every API call shows the overlay automatically.
+  async function api(endpoint) {
+    showLoader();
+    try {
+      const res = await fetch(`/api/${endpoint}`);
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return await res.json();
+    } finally {
+      hideLoader();
+    }
+  }
+
+  // Initialize app — each step guarded so one failure can't block the others
   function init() {
-    initTabs();
-    initClock();
-    initDataSource();
-    Dashboard.load();
-    Chatbot.init();
-    SocketManager.init();
+    const safe = (label, fn) => { try { fn(); } catch (e) { console.error(`[init] ${label} failed:`, e); } };
+    safe('tabs', initTabs);
+    safe('clock', initClock);
+    safe('dataSource', initDataSource);
+    safe('assistant', () => { if (window.Assistant) Assistant.init(); });
+    safe('alerts', () => Alerts.load());
+    safe('alertsBadge', updateAlertsBadge);
+    safe('socket', () => SocketManager.init());
   }
 
   // Start when DOM is ready
@@ -141,6 +198,9 @@ const App = (() => {
     statusBadge,
     severityBadge,
     api,
+    showLoader,
+    hideLoader,
+    updateAlertsBadge,
     getActiveTab: () => activeTab
   };
 })();

@@ -3,10 +3,23 @@
 
 const fs = require('fs');
 const path = require('path');
+const trendSource = require('../config/trendSource');
 
-const TRENDDATA_DIR = path.join(__dirname, '..', 'data', 'Trenddata');
+// CSV folder. Override with TREND_CSV_DIR (relative to the project root or absolute),
+// e.g. the smoke test / CI points it at the fictional data in data/Trenddata/sample.
+const TRENDDATA_DIR = process.env.TREND_CSV_DIR
+  ? path.resolve(__dirname, '..', process.env.TREND_CSV_DIR)
+  : path.join(__dirname, '..', 'data', 'Trenddata');
 
 let cachedRecords = null;
+// Daily per-(workflow,day) aggregate rows for the Trends & Analysis tab.
+// Populated in DB mode from a GROUP BY query (tiny footprint); in CSV mode it is
+// derived in-memory from the raw records so the same code path serves both.
+let cachedAggregates = null;
+
+// Stack-safe max/min for large arrays (Math.max(...arr) overflows on 100k+ elements)
+function arrMax(arr) { let m = -Infinity; for (let i = 0; i < arr.length; i++) if (arr[i] > m) m = arr[i]; return m; }
+function arrMin(arr) { let m = Infinity; for (let i = 0; i < arr.length; i++) if (arr[i] < m) m = arr[i]; return m; }
 
 /**
  * Parse a single CSV line respecting quoted fields (handles commas inside quotes)
@@ -39,9 +52,65 @@ function parseCsvLine(line) {
 /**
  * Load and parse all CSV files from the Trenddata directory
  */
-function loadAllRecords() {
-  if (cachedRecords) return cachedRecords;
+const clean = (s) => (s == null ? '' : s.replace(/^"|"$/g, '').trim());
 
+/**
+ * Resolve a usable "YYYY-MM-DD HH:MM:SS" datetime for a record.
+ * Priority:
+ *   1) CREATIONDATE if it is a valid full datetime (some exports mangle it to "MM:SS.0")
+ *   2) METADATA <lastModified>YYYYMMDDHHMMSS</lastModified>
+ *   3) RECEIVEDATE (date only) — appended with 00:00:00
+ * Returns null if nothing usable is found.
+ */
+function resolveDatetime(creationDate, metadata, receiveDate) {
+  // 1) Valid CREATIONDATE — must contain a 4-digit year and look like a date
+  if (creationDate && /\d{4}-\d{2}-\d{2}/.test(creationDate)) {
+    // Normalize "2026-09-15 10:25:22.000" -> "2026-09-15 10:25:22"
+    const m = creationDate.match(/(\d{4}-\d{2}-\d{2})[ T]?(\d{2}:\d{2}:\d{2})?/);
+    if (m) return `${m[1]} ${m[2] || '00:00:00'}`;
+  }
+
+  // 2) METADATA lastModified (YYYYMMDDHHMMSS)
+  if (metadata) {
+    const lm = metadata.match(/<lastModified>(\d{14})<\/lastModified>/);
+    if (lm) {
+      const s = lm[1];
+      return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)} ${s.slice(8, 10)}:${s.slice(10, 12)}:${s.slice(12, 14)}`;
+    }
+  }
+
+  // 3) RECEIVEDATE (date only)
+  if (receiveDate && /\d{4}-\d{2}-\d{2}/.test(receiveDate)) {
+    const d = receiveDate.match(/\d{4}-\d{2}-\d{2}/)[0];
+    return `${d} 00:00:00`;
+  }
+
+  return null;
+}
+
+/**
+ * Read a (potentially very large) file line by line, invoking onLine(line) for each.
+ * Uses a streamed buffered read so we never hold the whole file as one big string.
+ */
+function forEachLineSync(filePath, onLine) {
+  const fd = fs.openSync(filePath, 'r');
+  const BUF = Buffer.alloc(1 << 20); // 1MB chunks
+  let leftover = '';
+  try {
+    let bytes;
+    while ((bytes = fs.readSync(fd, BUF, 0, BUF.length, null)) > 0) {
+      const chunk = leftover + BUF.toString('utf-8', 0, bytes);
+      const parts = chunk.split('\n');
+      leftover = parts.pop(); // last piece may be a partial line
+      for (const line of parts) onLine(line);
+    }
+    if (leftover.length > 0) onLine(leftover);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function loadRecordsFromCsv() {
   const records = [];
 
   if (!fs.existsSync(TRENDDATA_DIR)) {
@@ -53,54 +122,315 @@ function loadAllRecords() {
 
   for (const file of files) {
     const filePath = path.join(TRENDDATA_DIR, file);
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const lines = content.split('\n').filter(l => l.trim().length > 0);
 
-    if (lines.length < 2) continue;
+    let headers = null;
+    let idx = null;
 
-    const headers = parseCsvLine(lines[0]).map(h => h.replace(/^"|"$/g, '').trim());
+    forEachLineSync(filePath, (rawLine) => {
+      const line = rawLine.replace(/\r$/, '');
+      if (line.trim().length === 0) return;
 
-    const idxWorkflowId = headers.indexOf('WORKFLOWID');
-    const idxDocFilename = headers.indexOf('DOCFILENAME');
-    const idxDocSize = headers.indexOf('DOCSIZE');
-    const idxCreationDate = headers.indexOf('CREATIONDATE');
-    const idxStatus = headers.indexOf('STATUS');
+      if (!headers) {
+        headers = parseCsvLine(line).map(h => clean(h));
+        idx = {
+          docId: headers.indexOf('DOCID'),
+          workflowId: headers.indexOf('WORKFLOWID'),
+          docFilename: headers.indexOf('DOCFILENAME'),
+          docSize: headers.indexOf('DOCSIZE'),
+          creationDate: headers.indexOf('CREATIONDATE'),
+          status: headers.indexOf('STATUS'),
+          metadata: headers.indexOf('METADATA'),
+          receiveDate: headers.indexOf('RECEIVEDATE')
+        };
+        return;
+      }
 
-    for (let i = 1; i < lines.length; i++) {
-      const fields = parseCsvLine(lines[i]);
-      if (fields.length < headers.length) continue;
+      const fields = parseCsvLine(line);
+      if (fields.length < headers.length) return;
 
-      const workflowId = idxWorkflowId >= 0 ? fields[idxWorkflowId].replace(/^"|"$/g, '').trim() : '';
-      const docFilename = idxDocFilename >= 0 ? fields[idxDocFilename].replace(/^"|"$/g, '').trim() : '';
-      const docSize = idxDocSize >= 0 ? fields[idxDocSize].replace(/^"|"$/g, '').trim() : '';
-      const creationDate = idxCreationDate >= 0 ? fields[idxCreationDate].replace(/^"|"$/g, '').trim() : '';
-      const status = idxStatus >= 0 ? fields[idxStatus].replace(/^"|"$/g, '').trim() : '';
+      const docFilename = idx.docFilename >= 0 ? clean(fields[idx.docFilename]) : '';
+      if (!docFilename) return;
 
-      if (!docFilename) continue;
+      const docSize = idx.docSize >= 0 ? clean(fields[idx.docSize]) : '';
+      const creationDate = idx.creationDate >= 0 ? clean(fields[idx.creationDate]) : '';
+      const metadata = idx.metadata >= 0 ? fields[idx.metadata] : '';
+      const receiveDate = idx.receiveDate >= 0 ? clean(fields[idx.receiveDate]) : '';
+      const received = resolveDatetime(creationDate, metadata, receiveDate);
 
       records.push({
-        workflow_id: workflowId,
+        doc_id: idx.docId >= 0 ? clean(fields[idx.docId]) : '',
+        workflow_id: idx.workflowId >= 0 ? clean(fields[idx.workflowId]) : '',
         file_name: docFilename,
         size_kb: docSize ? Math.round(parseFloat(docSize) / 1024 * 100) / 100 : null,
         size_bytes: docSize ? parseInt(docSize, 10) : null,
-        received: creationDate || null,
-        status: status,
+        received: received,
+        status: idx.status >= 0 ? clean(fields[idx.status]) : '',
         source_file: file
       });
-    }
+    });
   }
 
-  // Sort by received date descending (newest first)
+  sortByReceivedDesc(records);
+  console.log(`[TrendDataService] Loaded ${records.length} records from ${files.length} CSV files`);
+  return records;
+}
+
+function sortByReceivedDesc(records) {
   records.sort((a, b) => {
     if (!a.received && !b.received) return 0;
     if (!a.received) return 1;
     if (!b.received) return -1;
     return new Date(b.received) - new Date(a.received);
   });
+}
 
-  cachedRecords = records;
-  console.log(`[TrendDataService] Loaded ${records.length} records from ${files.length} CSV files`);
-  return records;
+// Guards against overlapping DB queries: if a load is already running, callers
+// await the SAME promise instead of firing another query at the DB.
+let loadingPromise = null;
+
+/**
+ * Initialize the data cache from the configured source.
+ * Called once at server startup, and on explicit reload. In DB mode, concurrent
+ * calls share a single in-flight query (no overlapping queries against the DB).
+ */
+async function initData() {
+  if (loadingPromise) return loadingPromise;  // a load is already in progress → reuse it
+
+  loadingPromise = (async () => {
+    const source = trendSource.source;
+    if (source === 'db') {
+      try {
+        const { getProvider } = require('./trendProviderFactory');
+        const settingsService = require('./settingsService');
+        const conns = trendSource.enabledConnections();
+
+        if (!conns.length) throw new Error('No database connections configured (set TREND_DB1_* in .env).');
+
+        // -------- ALERTS: recent raw records (always queried at startup) --------
+        // Needs per-file detail for missing-file detection, so it uses the
+        // row-capped recent query. This is independent of the trend snapshot.
+        const rawResults = await Promise.allSettled(
+          conns.map(c => getProvider(c).loadFromConnection(c, settingsService.getEffectiveQuery(c.client, c.name)))
+        );
+
+        let merged = [];
+        const okNames = [];
+        rawResults.forEach((r, i) => {
+          const name = conns[i].name;
+          if (r.status === 'fulfilled') {
+            merged = merged.concat(r.value);
+            okNames.push(`${name}:${r.value.length}`);
+            console.log(`[TrendDataService]   ${name} → ${r.value.length} records`);
+          } else {
+            console.error(`[TrendDataService]   ${name} → FAILED: ${r.reason && r.reason.message}`);
+          }
+        });
+
+        if (merged.length === 0 && okNames.length === 0) {
+          // Every connection failed → fall back to CSV rather than show nothing.
+          throw new Error('All MSSQL connections failed.');
+        }
+
+        sortByReceivedDesc(merged);
+        cachedRecords = merged;
+
+        // -------- TRENDS: monthly snapshot (days 1–14), read DB only if stale --------
+        await loadTrendSnapshot(conns, getProvider, settingsService, /*force*/ false);
+
+        console.log(`[TrendDataService] Loaded ${merged.length} records (alerts) + ${cachedAggregates ? cachedAggregates.length : 0} snapshot rows (trends) from ${okNames.length}/${conns.length} connection(s) [${okNames.join(', ')}]`);
+      } catch (err) {
+        console.error('[TrendDataService] DB load failed:', err.message);
+        console.error('[TrendDataService] Falling back to CSV source.');
+        cachedRecords = loadRecordsFromCsv();
+        cachedAggregates = buildAggregatesFromRecords(cachedRecords);
+      }
+    } else {
+      cachedRecords = loadRecordsFromCsv();
+      cachedAggregates = buildAggregatesFromRecords(cachedRecords);
+    }
+    return cachedRecords;
+  })();
+
+  try {
+    return await loadingPromise;
+  } finally {
+    loadingPromise = null;  // clear so a future explicit reload can run
+  }
+}
+
+/**
+ * Load the Trends & Analysis daily aggregates from the MONTHLY snapshot.
+ *
+ * - If a current snapshot exists on disk (its window matches the target 1–14
+ *   window for today), load it — NO database read. This is the common path on
+ *   every `npm run dev` / restart.
+ * - Otherwise (missing, stale month, or force=true) query the DB ONCE with the
+ *   fixed 1–14 window and NO row cap, persist the result to disk, and cache it.
+ *
+ * On DB failure it keeps any existing snapshot rather than wiping trends.
+ */
+async function loadTrendSnapshot(conns, getProvider, settingsService, force) {
+  const snapStore = require('./trendSnapshotStore');
+  const now = new Date();
+  const target = snapStore.computeWindow(now);
+
+  if (!force) {
+    const saved = snapStore.read();
+    if (snapStore.isCurrent(saved, now)) {
+      cachedAggregates = saved.rows;
+      console.log(`[TrendDataService] Trends: using saved snapshot ${saved.window.label} (${saved.rows.length} rows) — no DB read.`);
+      return;
+    }
+  }
+
+  console.log(`[TrendDataService] Trends: building snapshot for ${target.label} (${target.from} → ${target.to}) …`);
+  const aggResults = await Promise.allSettled(
+    conns.map(c => getProvider(c).loadAggregatesFromConnection(c, settingsService.getAggregateQuery(c.client, { from: target.from, to: target.to }, c.name)))
+  );
+
+  let aggMerged = [];
+  let anyOk = false;
+  aggResults.forEach((r, i) => {
+    const name = conns[i].name;
+    if (r.status === 'fulfilled') {
+      anyOk = true;
+      aggMerged = aggMerged.concat(r.value.map(normalizeAggregateRow));
+      console.log(`[TrendDataService]   ${name} snapshot → ${r.value.length} daily rows`);
+    } else {
+      console.error(`[TrendDataService]   ${name} snapshot → FAILED: ${r.reason && r.reason.message}`);
+    }
+  });
+
+  if (!anyOk) {
+    // Don't destroy an existing snapshot on total failure — keep serving the old one.
+    const saved = snapStore.read();
+    if (saved && Array.isArray(saved.rows)) {
+      cachedAggregates = saved.rows;
+      console.warn('[TrendDataService] Trends: snapshot rebuild failed; keeping previous snapshot.');
+      return;
+    }
+    cachedAggregates = [];
+    console.warn('[TrendDataService] Trends: snapshot rebuild failed and no previous snapshot exists.');
+    return;
+  }
+
+  cachedAggregates = aggMerged;
+  snapStore.write({ window: target, generatedAt: new Date().toISOString(), rows: aggMerged });
+  console.log(`[TrendDataService] Trends: snapshot ${target.label} saved (${aggMerged.length} rows).`);
+}
+
+/**
+ * Synchronous accessor used everywhere. Returns the cached records.
+ * - CSV mode: if cache is empty, loads synchronously on demand (safe, fast).
+ * - DB mode: relies on initData() having run at startup; if not ready, returns [].
+ */
+// ---- Daily aggregate helpers ----
+const { field: aggField } = require('./trendRowMapper');
+
+// Coerce a DB aggregate row (column names vary in case; values may be strings,
+// Date objects, or decimals) into the normalized aggregate shape used by the
+// trend/analysis functions.
+function normalizeAggregateRow(row) {
+  const num = (v) => {
+    if (v == null || v === '') return null;
+    const n = typeof v === 'number' ? v : parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  // DAY may come back as a Date or a string; normalize to YYYY-MM-DD.
+  let day = aggField(row, 'DAY');
+  if (day instanceof Date) {
+    const p = (n) => String(n).padStart(2, '0');
+    day = `${day.getFullYear()}-${p(day.getMonth() + 1)}-${p(day.getDate())}`;
+  } else if (day != null) {
+    day = String(day).slice(0, 10);
+  }
+  return {
+    workflow_id: aggField(row, 'WORKFLOWID') != null ? String(aggField(row, 'WORKFLOWID')) : '',
+    day: day || null,
+    count: num(aggField(row, 'CNT')) || 0,
+    cnt50: num(aggField(row, 'CNT_50')) || 0,
+    cnt45: num(aggField(row, 'CNT_45')) || 0,
+    cnt999: num(aggField(row, 'CNT_999')) || 0,
+    minHour: num(aggField(row, 'MIN_HOUR')),
+    maxHour: num(aggField(row, 'MAX_HOUR')),
+    avgHour: num(aggField(row, 'AVG_HOUR')),
+    avgSizeKb: num(aggField(row, 'AVG_SIZE_KB')),
+    minSizeKb: num(aggField(row, 'MIN_SIZE_KB')),
+    maxSizeKb: num(aggField(row, 'MAX_SIZE_KB')),
+    source: row._source || 'db'
+  };
+}
+
+// Build the SAME daily-aggregate shape from raw in-memory records (CSV mode, or
+// DB fallback). Groups by (workflow, day) and derives the per-day stats locally.
+function buildAggregatesFromRecords(records) {
+  const groups = {};
+  (records || []).forEach(r => {
+    if (!r.received || !r.workflow_id) return;
+    const parts = r.received.split(' ');
+    const day = parts[0];
+    const timePart = parts[1];
+    const key = r.workflow_id + '\u0000' + day;
+    let g = groups[key];
+    if (!g) {
+      g = groups[key] = {
+        workflow_id: r.workflow_id, day, count: 0,
+        cnt50: 0, cnt45: 0, cnt999: 0,
+        hours: [], sizes: [], source: r.source_file || 'csv'
+      };
+    }
+    g.count++;
+    if (r.status === '50') g.cnt50++;
+    else if (r.status === '45') g.cnt45++;
+    else if (r.status === '999') g.cnt999++;
+    if (timePart) {
+      const [hh, mm] = timePart.split(':').map(Number);
+      if (Number.isFinite(hh)) g.hours.push(hh + (mm || 0) / 60);
+    }
+    if (r.size_kb != null) g.sizes.push(r.size_kb);
+  });
+
+  return Object.values(groups).map(g => {
+    const h = g.hours, s = g.sizes;
+    const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+    return {
+      workflow_id: g.workflow_id,
+      day: g.day,
+      count: g.count,
+      cnt50: g.cnt50, cnt45: g.cnt45, cnt999: g.cnt999,
+      minHour: h.length ? arrMin(h) : null,
+      maxHour: h.length ? arrMax(h) : null,
+      avgHour: avg(h),
+      avgSizeKb: avg(s),
+      minSizeKb: s.length ? arrMin(s) : null,
+      maxSizeKb: s.length ? arrMax(s) : null,
+      source: g.source
+    };
+  });
+}
+
+// Accessor for the daily aggregates (lazy-build in CSV mode if needed).
+function loadAggregates() {
+  if (cachedAggregates) return cachedAggregates;
+  if (trendSource.source === 'db') {
+    console.warn('[TrendDataService] Aggregates not initialized yet — call initData() at startup.');
+    return [];
+  }
+  cachedAggregates = buildAggregatesFromRecords(loadAllRecords());
+  return cachedAggregates;
+}
+
+function loadAllRecords() {
+  if (cachedRecords) return cachedRecords;
+
+  if (trendSource.source === 'db') {
+    console.warn('[TrendDataService] DB data not initialized yet — call initData() at startup.');
+    return [];
+  }
+
+  // CSV mode can load lazily and synchronously
+  cachedRecords = loadRecordsFromCsv();
+  return cachedRecords;
 }
 
 // ===================== FILES TAB =====================
@@ -114,6 +444,10 @@ function getRecords(filters = {}) {
   if (filters.workflow_id) {
     const q = filters.workflow_id.toLowerCase();
     records = records.filter(r => r.workflow_id.toLowerCase().includes(q));
+  }
+  if (filters.doc_id) {
+    const q = filters.doc_id.toLowerCase();
+    records = records.filter(r => (r.doc_id || '').toLowerCase().includes(q));
   }
   if (filters.status) {
     records = records.filter(r => r.status === filters.status);
@@ -216,54 +550,38 @@ function getOverviewStats() {
  * Returns per-day: earliest, latest, average arrival time (as decimal hours)
  */
 function getTrendData(workflowId, days = 30) {
-  let records = loadAllRecords();
+  let aggs = loadAggregates();
+  if (workflowId) aggs = aggs.filter(a => a.workflow_id === workflowId);
 
-  if (workflowId) {
-    records = records.filter(r => r.workflow_id === workflowId);
-  }
-
-  // Group by date, collect arrival times
-  const dailyData = {};
-  records.forEach(r => {
-    if (!r.received) return;
-    const parts = r.received.split(' ');
-    const date = parts[0]; // YYYY-MM-DD
-    const timePart = parts[1]; // HH:MM:SS.sss
-    if (!timePart) return;
-
-    const [hh, mm] = timePart.split(':').map(Number);
-    const decimalHour = hh + mm / 60; // e.g. 9:30 = 9.5
-
-    if (!dailyData[date]) {
-      dailyData[date] = { date, times: [], count: 0 };
-    }
-    dailyData[date].times.push(decimalHour);
-    dailyData[date].count++;
+  // Combine multiple workflows (or connections) that fall on the same day:
+  // count sums; earliest = min of min-hours; latest = max of max-hours;
+  // avg = count-weighted average of per-group avg hours.
+  const byDay = {};
+  aggs.forEach(a => {
+    if (!a.day) return;
+    let d = byDay[a.day];
+    if (!d) d = byDay[a.day] = { date: a.day, count: 0, min: null, max: null, avgWeighted: 0 };
+    d.count += a.count;
+    if (a.minHour != null) d.min = d.min == null ? a.minHour : Math.min(d.min, a.minHour);
+    if (a.maxHour != null) d.max = d.max == null ? a.maxHour : Math.max(d.max, a.maxHour);
+    if (a.avgHour != null) d.avgWeighted += a.avgHour * a.count;
   });
 
-  // Sort by date and limit to last N days
-  const sorted = Object.values(dailyData)
+  const sorted = Object.values(byDay)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(-days);
 
-  // Calculate timing stats per day
+  const r2 = (v) => (v == null ? null : Math.round(v * 100) / 100);
   return {
     workflow_id: workflowId || 'ALL',
     days: sorted.length,
-    data: sorted.map(d => {
-      const times = d.times.sort((a, b) => a - b);
-      const earliest = times[0];
-      const latest = times[times.length - 1];
-      const avg = times.reduce((s, t) => s + t, 0) / times.length;
-
-      return {
-        date: d.date,
-        earliest: Math.round(earliest * 100) / 100,
-        latest: Math.round(latest * 100) / 100,
-        avg: Math.round(avg * 100) / 100,
-        count: d.count
-      };
-    })
+    data: sorted.map(d => ({
+      date: d.date,
+      earliest: r2(d.min),
+      latest: r2(d.max),
+      avg: d.count > 0 ? r2(d.avgWeighted / d.count) : null,
+      count: d.count
+    }))
   };
 }
 
@@ -272,57 +590,42 @@ function getTrendData(workflowId, days = 30) {
  * Each point: { date, time (decimal hours), file_name }
  */
 function getArrivalTimes(workflowId, days = 30) {
-  let records = loadAllRecords();
-
-  if (workflowId) {
-    records = records.filter(r => r.workflow_id === workflowId);
-  }
-
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - days);
-  const cutoffStr = cutoffDate.toISOString().split('T')[0];
-
-  const arrivals = [];
-  records.forEach(r => {
-    if (!r.received) return;
-    const parts = r.received.split(' ');
-    const date = parts[0];
-    const timePart = parts[1];
-    if (!timePart || date < cutoffStr) return;
-
-    const [hh, mm] = timePart.split(':').map(Number);
-    const decimalHour = hh + mm / 60;
-
-    arrivals.push({
-      date,
-      time: Math.round(decimalHour * 100) / 100,
-      file_name: r.file_name
-    });
-  });
-
-  return arrivals.sort((a, b) => a.date.localeCompare(b.date));
+  // Individual scatter points are derived from raw documents, which we no longer
+  // pull in full for trends. The frontend does not render this series, so we
+  // return an empty array (kept for API back-compat).
+  return [];
 }
 
 /**
- * Get file size distribution for a workflow over time
+ * Get file size distribution per day (from daily aggregates).
+ * Returns one point per day carrying that day's avg and max size (KB). `date`
+ * is kept as a full "YYYY-MM-DD 00:00:00" string so the existing frontend, which
+ * splits on space, still groups correctly.
  */
 function getSizeTrend(workflowId, days = 30) {
-  let records = loadAllRecords();
+  let aggs = loadAggregates();
+  if (workflowId) aggs = aggs.filter(a => a.workflow_id === workflowId);
 
-  if (workflowId) {
-    records = records.filter(r => r.workflow_id === workflowId);
-  }
+  // Merge same-day rows across workflows/connections.
+  const byDay = {};
+  aggs.forEach(a => {
+    if (!a.day || a.avgSizeKb == null) return;
+    let d = byDay[a.day];
+    if (!d) d = byDay[a.day] = { day: a.day, sumWeighted: 0, count: 0, max: null };
+    d.sumWeighted += a.avgSizeKb * a.count;
+    d.count += a.count;
+    if (a.maxSizeKb != null) d.max = d.max == null ? a.maxSizeKb : Math.max(d.max, a.maxSizeKb);
+  });
 
-  // Only records with sizes and dates
-  const withSizes = records
-    .filter(r => r.size_kb && r.received)
-    .sort((a, b) => a.received.localeCompare(b.received))
-    .slice(-days * 50); // approximate
-
-  return withSizes.map(r => ({
-    date: r.received,
-    size_kb: r.size_kb
-  }));
+  const r2 = (v) => (v == null ? null : Math.round(v * 100) / 100);
+  return Object.values(byDay)
+    .sort((a, b) => a.day.localeCompare(b.day))
+    .slice(-days)
+    .map(d => ({
+      date: `${d.day} 00:00:00`,
+      size_kb: d.count > 0 ? r2(d.sumWeighted / d.count) : null,
+      max_size_kb: r2(d.max)
+    }));
 }
 
 // ===================== WORKFLOW ANALYSIS (AI Insights) =====================
@@ -332,101 +635,111 @@ function getSizeTrend(workflowId, days = 30) {
  * Returns detailed stats for each workflow: timing, volume, size, patterns
  */
 function getWorkflowAnalysis() {
-  const records = loadAllRecords();
-  const workflows = getDistinctWorkflows();
+  const aggs = loadAggregates();
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+  // Group aggregate rows by workflow.
+  const byWf = {};
+  aggs.forEach(a => {
+    if (!a.workflow_id) return;
+    (byWf[a.workflow_id] = byWf[a.workflow_id] || []).push(a);
+  });
+
+  const workflows = Object.keys(byWf).sort();
+
   return workflows.map(wf => {
-    const wfRecords = records.filter(r => r.workflow_id === wf);
-
-    // --- Group by date ---
-    const byDate = {};
+    // One row per day already; merge same-day rows (multiple connections) first.
+    const perDay = {};
     const byDayOfWeek = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
-    const arrivalHours = [];
 
-    wfRecords.forEach(r => {
-      if (!r.received) return;
-      const parts = r.received.split(' ');
-      const date = parts[0];
-      const timePart = parts[1];
-
-      if (!byDate[date]) byDate[date] = { count: 0, sizes: [], times: [] };
-      byDate[date].count++;
-      if (r.size_kb) byDate[date].sizes.push(r.size_kb);
-
-      if (timePart) {
-        const [hh, mm] = timePart.split(':').map(Number);
-        const decimalHour = hh + mm / 60;
-        byDate[date].times.push(decimalHour);
-        arrivalHours.push(decimalHour);
+    byWf[wf].forEach(a => {
+      if (!a.day) return;
+      let d = perDay[a.day];
+      if (!d) {
+        d = perDay[a.day] = {
+          count: 0, cnt50: 0, cnt45: 0, cnt999: 0,
+          minHour: null, maxHour: null, avgHourWeighted: 0,
+          sizeAvgWeighted: 0, sizeCount: 0, minSize: null, maxSize: null
+        };
       }
-
-      // Day of week
-      const d = new Date(date);
-      if (!isNaN(d.getTime())) {
-        byDayOfWeek[d.getDay()]++;
-      }
+      d.count += a.count;
+      d.cnt50 += a.cnt50; d.cnt45 += a.cnt45; d.cnt999 += a.cnt999;
+      if (a.minHour != null) d.minHour = d.minHour == null ? a.minHour : Math.min(d.minHour, a.minHour);
+      if (a.maxHour != null) d.maxHour = d.maxHour == null ? a.maxHour : Math.max(d.maxHour, a.maxHour);
+      if (a.avgHour != null) d.avgHourWeighted += a.avgHour * a.count;
+      if (a.avgSizeKb != null) { d.sizeAvgWeighted += a.avgSizeKb * a.count; d.sizeCount += a.count; }
+      if (a.minSizeKb != null) d.minSize = d.minSize == null ? a.minSizeKb : Math.min(d.minSize, a.minSizeKb);
+      if (a.maxSizeKb != null) d.maxSize = d.maxSize == null ? a.maxSizeKb : Math.max(d.maxSize, a.maxSizeKb);
     });
 
-    const dates = Object.keys(byDate).sort();
-    const dailyCounts = Object.values(byDate).map(d => d.count);
+    const dates = Object.keys(perDay).sort();
+    const dailyCounts = dates.map(d => perDay[d].count);
+    const totalCount = dailyCounts.reduce((s, v) => s + v, 0);
 
-    // --- 1. When files start coming in daily (average first arrival) ---
-    const firstArrivals = Object.values(byDate)
-      .filter(d => d.times.length > 0)
-      .map(d => Math.min(...d.times));
-    const avgFirstArrival = firstArrivals.length > 0
+    // Day-of-week counts
+    dates.forEach(d => {
+      const dow = new Date(d).getDay();
+      if (!isNaN(dow)) byDayOfWeek[dow] += perDay[d].count;
+    });
+
+    // 1) Avg first arrival = average of each day's earliest (min) hour
+    const firstArrivals = dates.map(d => perDay[d].minHour).filter(v => v != null);
+    const avgFirstArrival = firstArrivals.length
       ? firstArrivals.reduce((s, v) => s + v, 0) / firstArrivals.length
       : null;
 
-    // --- 2. Average files received daily ---
-    const avgDailyCount = dailyCounts.length > 0
-      ? Math.round(dailyCounts.reduce((s, v) => s + v, 0) / dailyCounts.length)
+    // 2) Avg files/day
+    const avgDailyCount = dailyCounts.length
+      ? Math.round(totalCount / dailyCounts.length)
       : 0;
 
-    // --- 3. Average file size ---
-    const allSizes = wfRecords.filter(r => r.size_kb).map(r => r.size_kb);
-    const avgSize = allSizes.length > 0
-      ? Math.round(allSizes.reduce((s, v) => s + v, 0) / allSizes.length * 100) / 100
-      : 0;
+    // 3) Avg file size (count-weighted across days)
+    let sizeWeighted = 0, sizeCount = 0;
+    dates.forEach(d => { sizeWeighted += perDay[d].sizeAvgWeighted; sizeCount += perDay[d].sizeCount; });
+    const avgSize = sizeCount ? Math.round((sizeWeighted / sizeCount) * 100) / 100 : 0;
 
-    // --- 4. Date with most / fewest files ---
+    // 4) Peak / quiet DATE by daily count
     let peakDate = null, peakCount = 0, quietDate = null, quietCount = Infinity;
-    Object.entries(byDate).forEach(([date, data]) => {
-      if (data.count > peakCount) { peakCount = data.count; peakDate = date; }
-      if (data.count < quietCount) { quietCount = data.count; quietDate = date; }
+    dates.forEach(d => {
+      const c = perDay[d].count;
+      if (c > peakCount) { peakCount = c; peakDate = d; }
+      if (c < quietCount) { quietCount = c; quietDate = d; }
     });
+    if (quietCount === Infinity) quietCount = 0;
 
-    // --- 5. Peak hours (80% of files arrive between...) ---
-    let peakHourStart = null, peakHourEnd = null;
-    if (arrivalHours.length > 0) {
-      const sorted = [...arrivalHours].sort((a, b) => a - b);
-      const p10 = sorted[Math.floor(sorted.length * 0.1)];
-      const p90 = sorted[Math.floor(sorted.length * 0.9)];
-      peakHourStart = p10;
-      peakHourEnd = p90;
-    }
+    // 5) Peak-hours window — approximated from the earliest & latest daily hours
+    //    (exact p10/p90 needs per-file data, which we intentionally don't pull).
+    const minHours = dates.map(d => perDay[d].minHour).filter(v => v != null);
+    const maxHours = dates.map(d => perDay[d].maxHour).filter(v => v != null);
+    const peakHourStart = minHours.length ? arrMin(minHours) : null;
+    const peakHourEnd = maxHours.length ? arrMax(maxHours) : null;
 
-    // --- 6. Size range (min/max) ---
-    const minSize = allSizes.length > 0 ? Math.min(...allSizes) : 0;
-    const maxSize = allSizes.length > 0 ? Math.max(...allSizes) : 0;
+    // 6) Size range (min/max across days)
+    const minSizes = dates.map(d => perDay[d].minSize).filter(v => v != null);
+    const maxSizes = dates.map(d => perDay[d].maxSize).filter(v => v != null);
+    const minSize = minSizes.length ? arrMin(minSizes) : 0;
+    const maxSize = maxSizes.length ? arrMax(maxSizes) : 0;
 
-    // --- 7. Status distribution ---
-    const statusDist = {};
-    wfRecords.forEach(r => {
-      statusDist[r.status] = (statusDist[r.status] || 0) + 1;
-    });
-    const totalCount = wfRecords.length;
+    // 7) Status distribution (from per-status counts). Only known codes tracked.
+    const cnt50 = dates.reduce((s, d) => s + perDay[d].cnt50, 0);
+    const cnt45 = dates.reduce((s, d) => s + perDay[d].cnt45, 0);
+    const cnt999 = dates.reduce((s, d) => s + perDay[d].cnt999, 0);
+    const other = totalCount - cnt50 - cnt45 - cnt999;
+    const statusDistribution = [];
+    const pushStatus = (status, count) => {
+      if (count > 0) statusDistribution.push({ status, count, percentage: totalCount > 0 ? Math.round((count / totalCount) * 10000) / 100 : 0 });
+    };
+    pushStatus('50', cnt50);
+    pushStatus('45', cnt45);
+    pushStatus('999', cnt999);
+    pushStatus('other', other);
 
-    // --- 8. Busiest day of week ---
-    const busiestDayIdx = Object.entries(byDayOfWeek)
-      .sort(([, a], [, b]) => b - a)[0];
-    const quietestDayIdx = Object.entries(byDayOfWeek)
-      .filter(([, count]) => count > 0)
-      .sort(([, a], [, b]) => a - b)[0];
+    // 8) Busiest / quietest day of week
+    const busiestDayIdx = Object.entries(byDayOfWeek).sort(([, a], [, b]) => b - a)[0];
+    const quietestDayIdx = Object.entries(byDayOfWeek).filter(([, c]) => c > 0).sort(([, a], [, b]) => a - b)[0];
 
-    // --- 9. Error rate ---
-    const errors = wfRecords.filter(r => r.status === '999').length;
+    // 9) Error rate (status 999)
+    const errors = cnt999;
     const errorRate = totalCount > 0 ? Math.round((errors / totalCount) * 10000) / 100 : 0;
 
     return {
@@ -435,19 +748,15 @@ function getWorkflowAnalysis() {
       totalDays: dates.length,
       dateRange: { from: dates[0] || null, to: dates[dates.length - 1] || null },
 
-      // Core analysis
       avgFirstArrival: avgFirstArrival != null ? Math.round(avgFirstArrival * 100) / 100 : null,
       avgDailyCount,
       avgSizeKb: avgSize,
       peakDate: { date: peakDate, count: peakCount },
       quietDate: { date: quietDate, count: quietCount },
 
-      // Additional insights
       peakHours: { start: peakHourStart, end: peakHourEnd },
       sizeRange: { min: Math.round(minSize * 100) / 100, max: Math.round(maxSize * 100) / 100 },
-      statusDistribution: Object.entries(statusDist).map(([status, count]) => ({
-        status, count, percentage: Math.round((count / totalCount) * 10000) / 100
-      })),
+      statusDistribution,
       busiestDayOfWeek: busiestDayIdx ? { day: dayNames[parseInt(busiestDayIdx[0])], count: busiestDayIdx[1] } : null,
       quietestDayOfWeek: quietestDayIdx ? { day: dayNames[parseInt(quietestDayIdx[0])], count: quietestDayIdx[1] } : null,
       errorRate,
@@ -524,6 +833,55 @@ function getAlerts(filters = {}) {
     });
   }
 
+  // Alert 4: Overdue — no file received for longer than the workflow's average gap
+  // "Now" = the most recent timestamp across all data (this is historical CSV data).
+  const dated = records.filter(r => r.received).map(r => new Date(r.received).getTime());
+  if (dated.length > 0) {
+    const nowRef = arrMax(dated);
+    let overdueId = errorRecords.length + 200;
+
+    getDistinctWorkflows().forEach(wf => {
+      // This workflow's file times, oldest -> newest
+      const times = records
+        .filter(r => r.workflow_id === wf && r.received)
+        .map(r => new Date(r.received).getTime())
+        .sort((a, b) => a - b);
+
+      if (times.length < 3) return; // need enough history to have a meaningful average
+
+      // Average gap between consecutive files (ms)
+      let gapSum = 0;
+      for (let i = 1; i < times.length; i++) gapSum += times[i] - times[i - 1];
+      const avgGap = gapSum / (times.length - 1);
+      if (avgGap <= 0) return;
+
+      const lastTime = times[times.length - 1];
+      const sinceLast = nowRef - lastTime;
+
+      // Overdue if the current silence is well beyond the normal gap (1.5x buffer to avoid noise)
+      if (sinceLast > avgGap * 1.5) {
+        const avgHrs = avgGap / 3600000;
+        const sinceHrs = sinceLast / 3600000;
+        const fmt = (h) => h >= 24 ? `${(h / 24).toFixed(1)} day(s)` : `${h.toFixed(1)} hr(s)`;
+        // Escalate to critical when it's very overdue (3x the normal gap)
+        const severity = sinceLast > avgGap * 3 ? 'critical' : 'warning';
+
+        alerts.push({
+          id: overdueId++,
+          severity,
+          type: 'overdue',
+          title: `No new files in ${fmt(sinceHrs)} — ${wf}`,
+          message: `Workflow "${wf}" usually receives a file about every ${fmt(avgHrs)}, but none has arrived for ${fmt(sinceHrs)} (last: ${new Date(lastTime).toISOString().replace('T', ' ').slice(0, 19)}).`,
+          workflow_id: wf,
+          source: wf,
+          received: new Date(lastTime).toISOString().replace('T', ' ').slice(0, 19),
+          acknowledged: false,
+          created_at: new Date(lastTime).toISOString().replace('T', ' ').slice(0, 19)
+        });
+      }
+    });
+  }
+
   // Apply filters
   let filtered = alerts;
   if (filters.severity) {
@@ -572,22 +930,27 @@ function getAlertStats() {
  * Get reliability scores per workflow based on completion rate (status 50)
  */
 function getReliabilityScores() {
-  const records = loadAllRecords();
-  const workflows = getDistinctWorkflows();
+  const aggs = loadAggregates();
+  const byWf = {};
+  aggs.forEach(a => {
+    if (!a.workflow_id) return;
+    let g = byWf[a.workflow_id];
+    if (!g) g = byWf[a.workflow_id] = { total: 0, completed: 0, errors: 0 };
+    g.total += a.count;
+    g.completed += a.cnt50;
+    g.errors += a.cnt999;
+  });
 
-  return workflows.map(wf => {
-    const wfRecords = records.filter(r => r.workflow_id === wf);
-    const completed = wfRecords.filter(r => r.status === '50').length;
-    const total = wfRecords.length;
-    const score = total > 0 ? Math.round((completed / total) * 100) / 100 : 0;
-
+  return Object.keys(byWf).sort().map(wf => {
+    const g = byWf[wf];
+    const score = g.total > 0 ? Math.round((g.completed / g.total) * 100) / 100 : 0;
     return {
       workflow_id: wf,
       workflow_name: wf,
       reliability_score: score,
-      total_records: total,
-      completed,
-      errors: wfRecords.filter(r => r.status === '999').length
+      total_records: g.total,
+      completed: g.completed,
+      errors: g.errors
     };
   });
 }
@@ -596,25 +959,30 @@ function getReliabilityScores() {
  * Generate AI weekly summary from real data
  */
 function generateSummary() {
-  const records = loadAllRecords();
-  const workflows = getDistinctWorkflows();
+  const aggs = loadAggregates();
   const reliability = getReliabilityScores();
   const alertStats = getAlertStats();
 
-  const totalRecords = records.length;
-  const completed = records.filter(r => r.status === '50').length;
-  const errors = records.filter(r => r.status === '999').length;
-  const inProgress = records.filter(r => r.status === '45').length;
+  let totalRecords = 0, completed = 0, errors = 0, inProgress = 0;
+  const wfCounts = {};
+  const daysSet = new Set();
+  aggs.forEach(a => {
+    totalRecords += a.count;
+    completed += a.cnt50;
+    errors += a.cnt999;
+    inProgress += a.cnt45;
+    if (a.workflow_id) wfCounts[a.workflow_id] = (wfCounts[a.workflow_id] || 0) + a.count;
+    if (a.day) daysSet.add(a.day);
+  });
+  const workflows = Object.keys(wfCounts);
   const completionRate = totalRecords > 0 ? Math.round((completed / totalRecords) * 100) : 0;
 
-  // Date range
-  const dates = records.filter(r => r.received).map(r => r.received.split(' ')[0]);
-  const minDate = dates.length > 0 ? dates[dates.length - 1] : 'N/A';
-  const maxDate = dates.length > 0 ? dates[0] : 'N/A';
+  // Date range (from the aggregated day buckets)
+  const sortedDays = [...daysSet].sort();
+  const minDate = sortedDays.length ? sortedDays[0] : 'N/A';
+  const maxDate = sortedDays.length ? sortedDays[sortedDays.length - 1] : 'N/A';
 
   // Most active workflow
-  const wfCounts = {};
-  records.forEach(r => { wfCounts[r.workflow_id] = (wfCounts[r.workflow_id] || 0) + 1; });
   const mostActive = Object.entries(wfCounts).sort(([, a], [, b]) => b - a)[0];
 
   // Lowest reliability
@@ -763,6 +1131,37 @@ function getAnomalies() {
 
 function invalidateCache() {
   cachedRecords = null;
+}
+
+/**
+ * Reload data from the configured source (clears cache then re-inits).
+ * Use this to refresh without restarting the server.
+ */
+async function reloadData() {
+  // Refresh alerts (recent records). Trends load from the monthly snapshot;
+  // a normal reload does NOT force a snapshot rebuild — the snapshot only
+  // changes on the 15th (month rollover) or via refreshTrendSnapshot().
+  cachedRecords = null;
+  return initData();
+}
+
+/**
+ * Force-rebuild the Trends & Analysis monthly snapshot from the database now,
+ * regardless of whether the saved one is still current. Persists the result.
+ * Used by an Admin "Rebuild trend snapshot" action.
+ */
+async function refreshTrendSnapshot() {
+  if (trendSource.source !== 'db') {
+    // CSV mode derives aggregates in-memory from records.
+    cachedAggregates = buildAggregatesFromRecords(loadAllRecords());
+    return { rows: cachedAggregates.length, mode: 'csv' };
+  }
+  const { getProvider } = require('./trendProviderFactory');
+  const settingsService = require('./settingsService');
+  const conns = trendSource.enabledConnections();
+  if (!conns.length) throw new Error('No database connections configured.');
+  await loadTrendSnapshot(conns, getProvider, settingsService, /*force*/ true);
+  return { rows: cachedAggregates ? cachedAggregates.length : 0, mode: 'db' };
 }
 
 // ===================== SLA COMPLIANCE =====================
@@ -1070,6 +1469,7 @@ module.exports = {
   getTrendData,
   getArrivalTimes,
   getSizeTrend,
+  loadAggregates,
   // Workflow Analysis
   getWorkflowAnalysis,
   // Insights - new
@@ -1087,5 +1487,8 @@ module.exports = {
   getAnomalies,
   // Utils
   invalidateCache,
+  reloadData,
+  refreshTrendSnapshot,
+  initData,
   loadAllRecords
 };

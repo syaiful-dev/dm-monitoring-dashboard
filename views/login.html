@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login — DM Monitoring Dashboard</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .login-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; width: 360px; max-width: calc(100vw - 32px); }
+    .login-title { font-size: 1.2rem; color: var(--text-primary); margin-bottom: 4px; }
+    .login-sub { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 20px; }
+    .login-label { display: block; font-size: 0.75rem; color: var(--text-secondary); margin: 12px 0 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .login-input { width: 100%; padding: 10px 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 0.9rem; }
+    .login-input:focus { outline: none; border-color: var(--accent-blue); }
+    .login-btn { width: 100%; margin-top: 20px; padding: 10px; background: var(--accent-blue); color: #fff; border: none; border-radius: 6px; font-size: 0.9rem; cursor: pointer; }
+    .login-btn:hover { opacity: 0.9; }
+    .login-error { color: var(--accent-red); font-size: 0.8rem; margin-top: 12px; min-height: 1em; }
+    .login-back { display: block; text-align: center; margin-top: 16px; font-size: 0.8rem; color: var(--text-secondary); text-decoration: none; }
+    .login-back:hover { color: var(--accent-blue); }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-box">
+      <div class="login-title">🔐 Admin Login</div>
+      <div class="login-sub">DM Monitoring Dashboard — configuration</div>
+      <form id="loginForm">
+        <label class="login-label" for="username">Username</label>
+        <input class="login-input" type="text" id="username" autocomplete="username" required>
+        <label class="login-label" for="password">Password</label>
+        <input class="login-input" type="password" id="password" autocomplete="current-password" required>
+        <button class="login-btn" type="submit">Sign in</button>
+        <div class="login-error" id="loginError"></div>
+      </form>
+      <a class="login-back" href="/">← Back to dashboard</a>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const errEl = document.getElementById('loginError');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errEl.textContent = '';
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      try {
+        const res = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          window.location.href = '/admin';
+        } else {
+          errEl.textContent = data.error || 'Login failed';
+        }
+      } catch (err) {
+        errEl.textContent = 'Could not reach the server. Try again.';
+      }
+    });
+  </script>
+</body>
+</html>

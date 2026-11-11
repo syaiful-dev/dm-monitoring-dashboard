@@ -1,0 +1,715 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — DM Monitoring Dashboard</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    /* Admin-specific bits; base look reuses the dashboard's .header / .content / .card / .tab-* / .btn-* */
+    .admin-card { margin-bottom: 16px; }
+    .admin-card .hint { font-size: 0.75rem; color: var(--text-secondary); margin: 4px 0 14px; }
+    .a-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); margin: 12px 0 4px; }
+    .a-input, .a-textarea { width: 100%; padding: 8px 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 0.85rem; font-family: var(--font-family); }
+    .a-textarea { resize: vertical; line-height: 1.5; }
+    .a-input:focus, .a-textarea:focus { outline: none; border-color: var(--accent-blue); }
+    .a-save-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+    .a-status { font-size: 0.8rem; }
+    .a-status.ok { color: var(--accent-green); }
+    .a-status.err { color: var(--accent-red); }
+    .admin-user { font-size: 0.8rem; color: var(--text-secondary); }
+    .placeholders { font-size: 0.72rem; color: var(--text-secondary); margin-top: 6px; }
+    .placeholders code { background: var(--bg-secondary); padding: 1px 5px; border-radius: 3px; }
+    .recipients-list, .buyers-list { display: grid; gap: 8px; }
+    .recipient-row { display: grid; grid-template-columns: 320px 1fr 40px; gap: 10px; align-items: center; }
+    .recipient-wf { font-size: 0.78rem; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .recipient-input { font-size: 0.82rem; }
+    .recipient-remove { background: transparent; border: 1px solid var(--border); color: var(--accent-red); border-radius: 6px; cursor: pointer; font-size: 1rem; line-height: 1; padding: 6px 0; }
+    .recipient-add { display: grid; grid-template-columns: 320px 1fr auto; gap: 10px; align-items: center; }
+    .recipient-empty { font-size: 0.8rem; color: var(--text-secondary); padding: 4px 2px; }
+    /* Priority buyers editor */
+    .buyer-head, .buyer-row { display: grid; grid-template-columns: 1fr 1fr 40px; gap: 10px; align-items: center; }
+    .buyer-head span { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); }
+    .buyer-remove { background: transparent; border: 1px solid var(--border); color: var(--accent-red); border-radius: 6px; cursor: pointer; font-size: 1rem; line-height: 1; padding: 6px 0; }
+    /* Document types checkboxes */
+    .doctypes-list { display: flex; flex-wrap: wrap; gap: 10px; }
+    .doctype-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 0.85rem; color: var(--text-primary); user-select: none; }
+    .doctype-chip input { cursor: pointer; margin: 0; }
+    .doctype-chip:hover { border-color: var(--accent-blue, #4a9eff); }
+    /* SMTP config grid */
+    .smtp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .smtp-field { display: flex; flex-direction: column; gap: 4px; }
+    .smtp-field .a-label { margin: 0; }
+    /* Trend snapshot info */
+    .snap-info { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; margin-top: 10px; font-size: 0.85rem; }
+    .snap-info .k { color: var(--text-secondary); }
+    .snap-info .v { color: var(--text-primary); font-weight: 600; }
+    .snap-badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+    .snap-badge.ok { background: rgba(52,211,153,0.15); color: #34D399; }
+    .snap-badge.stale { background: rgba(245,179,1,0.15); color: #F5B301; }
+    .buyer-remove:hover { background: var(--bg-card-hover); }
+    .admin-tab-content { display: none; }
+    .admin-tab-content.active { display: block; }
+    .ds-result { margin-top: 14px; padding: 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font: 12px/1.5 Consolas, monospace; white-space: pre-wrap; max-height: 260px; overflow: auto; }
+    .conn-list { display: grid; gap: 8px; }
+    .conn-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 10px 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; }
+    .conn-info { font-size: 0.82rem; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; }
+    .conn-info small { display: block; color: var(--text-secondary); font-size: 0.72rem; margin-top: 2px; }
+    .conn-engine { display: inline-block; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; background: var(--bg-primary); border: 1px solid var(--border); color: var(--text-secondary); vertical-align: middle; }
+    .conn-result { font-size: 0.78rem; min-width: 90px; text-align: right; }
+    .conn-result.ok { color: var(--accent-green); }
+    .conn-result.err { color: var(--accent-red); }
+    @media (max-width: 640px) { .conn-row { grid-template-columns: 1fr; gap: 6px; } .conn-result { text-align: left; } }
+    @media (max-width: 640px) { .recipient-row, .recipient-add, .buyer-head, .buyer-row { grid-template-columns: 1fr; gap: 4px; } }
+  </style>
+</head>
+<body>
+  <!-- Header (matches the dashboard) -->
+  <header class="header">
+    <div class="header-left">
+      <h1 class="header-title">⚙️ Admin Configuration</h1>
+    </div>
+    <div class="header-right">
+      <span class="admin-user" id="whoami">—</span>
+      <a href="/" class="admin-link" title="Back to dashboard">← Dashboard</a>
+      <button class="admin-link" id="logoutBtn" style="cursor:pointer;">Logout</button>
+    </div>
+  </header>
+
+  <!-- Tab navigation (matches the dashboard) -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-atab="email">
+      <span class="tab-icon">📧</span>
+      <span class="tab-label">Missing-File Alert Email</span>
+    </button>
+    <button class="tab-btn" data-atab="buyers">
+      <span class="tab-icon">🎯</span>
+      <span class="tab-label">Priority Buyers</span>
+    </button>
+    <button class="tab-btn" data-atab="datasource">
+      <span class="tab-icon">🗄️</span>
+      <span class="tab-label">Data Source</span>
+    </button>
+    <button class="tab-btn" data-atab="trends">
+      <span class="tab-icon">📈</span>
+      <span class="tab-label">Trend &amp; Analysis</span>
+    </button>
+  </nav>
+
+  <main class="content">
+    <!-- ============ EMAIL TAB ============ -->
+    <section class="admin-tab-content active" id="atab-email">
+      <!-- Email template -->
+      <div class="card admin-card">
+        <h3 class="card-title">📧 Missing-File Alert Email</h3>
+        <div class="hint">The email draft shown when an operator clicks "Review" on an alert.</div>
+        <label class="a-label">Default recipient</label>
+        <input class="a-input" id="emailRecipient" type="text">
+        <div class="placeholders">Used when a workflow has no specific recipient below. Supports <code>{buyer}</code>.</div>
+        <label class="a-label" style="margin-top:16px;">Subject</label>
+        <input class="a-input" id="emailSubject" type="text">
+        <label class="a-label">Body</label>
+        <textarea class="a-textarea" id="emailBody" rows="12"></textarea>
+        <div class="placeholders">
+          Placeholders: <code>{buyer}</code> <code>{workflow}</code> <code>{expectedDay}</code>
+          <code>{lastReceived}</code> <code>{avgPerDay}</code> <code>{avgFirstArrival}</code>
+        </div>
+      </div>
+
+      <!-- SMTP server (for actually sending the alert email) -->
+      <div class="card admin-card">
+        <h3 class="card-title">📤 SMTP Server (send email)</h3>
+        <div class="hint">
+          Configure the mail server the app uses to send the alert email. When
+          <strong>disabled</strong>, clicking "Send Alert Email" will report that sending is off.
+        </div>
+        <label class="a-checkbox" style="display:flex;align-items:center;gap:8px;margin:4px 0 12px;">
+          <input type="checkbox" id="smtpEnabled"> <span>Enable email sending</span>
+        </label>
+        <div class="smtp-grid">
+          <div class="smtp-field">
+            <label class="a-label">SMTP host</label>
+            <input class="a-input" id="smtpHost" type="text" placeholder="e.g. smtp.office365.com">
+          </div>
+          <div class="smtp-field">
+            <label class="a-label">Port</label>
+            <input class="a-input" id="smtpPort" type="number" min="1" placeholder="587">
+          </div>
+          <div class="smtp-field">
+            <label class="a-label">Security</label>
+            <select class="a-input" id="smtpSecure">
+              <option value="false">STARTTLS (587)</option>
+              <option value="true">SSL/TLS (465)</option>
+            </select>
+          </div>
+          <div class="smtp-field">
+            <label class="a-label">Username</label>
+            <input class="a-input" id="smtpUser" type="text" placeholder="login / mailbox" autocomplete="off">
+          </div>
+          <div class="smtp-field">
+            <label class="a-label">Password <span id="smtpPwdState" class="fd-opt"></span></label>
+            <input class="a-input" id="smtpPassword" type="password" placeholder="leave blank to keep current" autocomplete="new-password">
+          </div>
+          <div class="smtp-field">
+            <label class="a-label">From name</label>
+            <input class="a-input" id="smtpFromName" type="text" placeholder="DM Monitoring">
+          </div>
+          <div class="smtp-field">
+            <label class="a-label">From address</label>
+            <input class="a-input" id="smtpFromAddress" type="text" placeholder="alerts@b2b.com.my">
+          </div>
+        </div>
+        <div class="a-save-row" style="margin-top:12px;">
+          <input class="a-input" id="smtpTestTo" type="text" placeholder="send test to… (optional)" style="width:240px;">
+          <button class="btn-sm" id="smtpTestBtn" type="button">Test connection</button>
+          <span class="a-status" id="smtpStatus"></span>
+        </div>
+        <div class="placeholders" style="margin-top:6px;">
+          The password is stored on the server (in <code>config/settings.json</code>, git-ignored) and is
+          never shown back here. Save settings first, then use "Test connection".
+        </div>
+      </div>
+
+      <!-- Re-alert window -->
+      <div class="card admin-card">
+        <h3 class="card-title">⏰ Re-alert Window</h3>
+        <div class="hint">After "Review", if the file is still missing, the alert re-surfaces after this many minutes.</div>
+        <label class="a-label">Minutes</label>
+        <input class="a-input" id="reAlertMinutes" type="number" min="1" style="width:120px;">
+      </div>
+
+      <!-- Per-workflow recipients -->
+      <div class="card admin-card">
+        <h3 class="card-title">📮 Per-Workflow Recipients</h3>
+        <div class="hint">Search for a workflow, enter its recipient email, and click Add. Only workflows with a specific recipient are listed below; all others use the default recipient above. Separate multiple emails with commas.</div>
+        <div class="recipient-add">
+          <select id="recipientWfSelect"></select>
+          <input class="a-input" id="recipientEmailInput" type="text" placeholder="recipient@example.com">
+          <button class="btn-sm" id="recipientAddBtn" type="button">+ Add</button>
+        </div>
+        <div id="recipientsList" class="recipients-list" style="margin-top:12px;"></div>
+      </div>
+    </section>
+
+    <!-- ============ PRIORITY BUYERS TAB ============ -->
+    <section class="admin-tab-content" id="atab-buyers">
+      <div class="card admin-card">
+        <h3 class="card-title">🎯 Priority Buyers</h3>
+        <div class="hint">Buyers monitored for missing-file alerts. The <strong>keyword</strong> is matched against the WORKFLOWID (case-insensitive). The <strong>display name</strong> is a friendly label shown in the UI.</div>
+        <div class="buyer-head">
+          <span>Buyer keyword (matches WORKFLOWID)</span>
+          <span>Display name (optional)</span>
+          <span></span>
+        </div>
+        <div id="buyersList" class="buyers-list" style="margin-top:6px;"></div>
+        <button class="btn-sm" id="addBuyerBtn" type="button" style="margin-top:12px;">+ Add buyer</button>
+      </div>
+
+      <div class="card admin-card">
+        <h3 class="card-title">🧩 Monitored Workflows (exact)</h3>
+        <div class="hint">
+          Full <code>WORKFLOWID</code> values to monitor <strong>in addition</strong> to the buyer keywords above.
+          Matched <strong>exactly</strong> and monitored <strong>regardless of document type</strong>. One per line.
+          <br><strong>Optional:</strong> pin a workflow to a specific database with <code>dbName | WORKFLOWID</code>
+          so it's only queried there (faster — avoids scanning the other databases). Without a <code>db |</code>
+          prefix, the workflow is searched on <strong>all</strong> databases.
+        </div>
+        <textarea class="a-textarea" id="monitoredWorkflows" rows="6" spellcheck="false"
+          placeholder="general_ehub | INVOIC_7ELEVEN-DKSHCG_TH_7ELEVEN-GEC_TH_7ELEVEN-DKSHCG_TH&#10;general_ehub | ORDERS_7ELEVEN-GEC_TH_BIZTRADE_MY_7ELEVEN-GEC_TH&#10;ORDERS_SOME_OTHER_WORKFLOW   (no prefix = all databases)"></textarea>
+        <div class="placeholders">Format: <code>dbName | WORKFLOWID</code> or just <code>WORKFLOWID</code>. Case-sensitive, matched with <code>=</code>. Blank lines ignored.</div>
+      </div>
+
+      <div class="card admin-card">
+        <h3 class="card-title">📄 Document Types</h3>
+        <div class="hint">Only these document types are pulled from the database. The query filters on <code>DOCTYPEID</code> (e.g. <code>WHERE DOCTYPEID IN ('ORDERS','INVOIC')</code>). If none are selected, <strong>all</strong> types are included.</div>
+        <div id="docTypesList" class="doctypes-list" style="margin-top:8px;"></div>
+      </div>
+    </section>
+
+    <!-- ============ DATA SOURCE TAB ============ -->
+    <section class="admin-tab-content" id="atab-datasource">
+      <!-- Connections -->
+      <div class="card admin-card">
+        <h3 class="card-title">🗄️ Database Connections</h3>
+        <div class="hint">
+          All configured connections — MSSQL or MySQL (defined in the server <code>.env</code> as <code>TREND_DB1_*</code> … <code>TREND_DB5_*</code>, each with <code>TREND_DBx_CLIENT</code>).
+          Their data is <strong>combined into one view</strong>. Each row's source is tagged.
+          <strong>Testing only checks login + reachability (<code>SELECT 1</code>) — no data query is run.</strong>
+        </div>
+        <div id="connList" class="conn-list"></div>
+        <div class="a-save-row" style="margin-top:12px;">
+          <button class="btn-sm" id="testAllBtn" type="button">Test all connections</button>
+          <span class="a-status" id="connStatus"></span>
+        </div>
+      </div>
+
+      <!-- Query — hidden for now (not in use). The #dsQuery field stays in the DOM
+           so load/save keep working; remove style="display:none" to re-enable. -->
+      <div class="card admin-card" style="display:none;">
+        <h3 class="card-title">📝 Query</h3>
+        <div class="hint">
+          The SELECT run against <em>every</em> connection. Must return columns:
+          <code>DOCID</code>, <code>WORKFLOWID</code>, <code>DOCFILENAME</code>,
+          <code>DOCSIZE</code>, <code>CREATIONDATE</code>, <code>STATUS</code>, and optionally
+          <code>METADATA</code>, <code>RECEIVEDATE</code>. Filters for priority buyers,
+          document types, and the history window (set in the <strong>Trend &amp; Analysis</strong>
+          tab) are applied automatically.
+          <br><strong>Note:</strong> the DB is only used when <code>TREND_SOURCE=db</code> in <code>.env</code>.
+        </div>
+        <label class="a-label">Query</label>
+        <textarea class="a-textarea" id="dsQuery" rows="6" spellcheck="false"></textarea>
+
+        <div class="a-save-row" style="margin-top:14px;">
+          <button class="btn-sm" id="reloadDataBtn" type="button">Reload data now</button>
+          <span class="a-status" id="dsStatus"></span>
+        </div>
+        <pre id="dsResult" class="ds-result" style="display:none;"></pre>
+      </div>
+    </section>
+
+    <!-- ============ TREND & ANALYSIS TAB ============ -->
+    <section class="admin-tab-content" id="atab-trends">
+      <div class="card admin-card">
+        <h3 class="card-title">📈 Trend &amp; Analysis — half-month snapshot</h3>
+        <div class="hint">
+          The Trends &amp; Analysis tab is built from a <strong>half-month snapshot</strong>: the daily
+          summary for the most recently completed phase — <strong>days 1–14</strong> or
+          <strong>days 15–end</strong> of a month — captured with <strong>no row cap</strong> and saved
+          to disk. The database is read <strong>twice a month</strong>; the snapshot refreshes
+          automatically on the <strong>1st</strong> and the <strong>15th</strong> (when a new phase
+          completes), so restarting the app never re-queries the DB.
+        </div>
+
+        <div id="snapInfo" class="snap-info">Loading snapshot info…</div>
+
+        <div class="a-save-row" style="margin-top:14px;">
+          <button class="btn-sm" id="refreshSnapBtn" type="button">Rebuild snapshot now</button>
+          <span class="a-status" id="snapStatus"></span>
+        </div>
+        <div class="placeholders" style="margin-top:6px;">
+          Manual rebuild reads the DB immediately for the current phase window. Use only if data changed
+          mid-phase; otherwise let it refresh automatically on the 1st and the 15th.
+        </div>
+      </div>
+
+      <div class="card admin-card">
+        <h3 class="card-title">🛡️ Alerts data — history window</h3>
+        <div class="hint">
+          The <strong>Alerts</strong> tab pulls recent documents (not the snapshot) to detect missing
+          files. It loads everything received in the last N days — a <strong>date window</strong>, so
+          every workflow with recent activity is covered (a busy workflow can't crowd out a quiet one).
+        </div>
+        <label class="a-label">Days of history to load (per connection)</label>
+        <input class="a-input" id="dsAlertDays" type="number" min="1" style="width:160px;">
+        <div class="placeholders" style="margin-top:6px;">
+          Recommended: <code>3</code> (minimum ~2 for missing-file detection to work — it compares day-to-day). Larger values load more data (slower start, more memory).
+        </div>
+        <!-- hidden fields kept so load/save stay intact -->
+        <input type="hidden" id="dsRowCap">
+        <input type="hidden" id="dsHistoryDays">
+        <div class="a-save-row" style="margin-top:14px;">
+          <button class="btn-sm" id="reloadDataBtn2" type="button">Reload alerts data now</button>
+          <span class="a-status" id="trendsStatus"></span>
+        </div>
+      </div>
+    </section>
+
+    <div class="a-save-row">
+      <button class="btn-primary" id="saveBtn">Save changes</button>
+      <span class="a-status" id="saveStatus"></span>
+    </div>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let workflowList = [];
+
+    function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+    // ---- In-page tab switching ----
+    document.querySelectorAll('.tab-btn[data-atab]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('.tab-btn[data-atab]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tab = btn.dataset.atab;
+        document.querySelectorAll('.admin-tab-content').forEach(c => c.classList.toggle('active', c.id === 'atab-' + tab));
+      });
+    });
+
+    // ---- Per-workflow recipients ----
+    // In-memory map of { workflowId: email } for workflows that have a specific
+    // recipient. The searchable dropdown adds to it; the list edits/removes it.
+    let recipientsState = {};
+
+    function renderRecipients(recipients) {
+      recipientsState = Object.assign({}, recipients || {});
+      populateRecipientDropdown();
+      renderRecipientRows();
+    }
+
+    // Fill the searchable <select> with workflows that DON'T already have a
+    // recipient (so you only pick unconfigured ones), then enhance it.
+    function populateRecipientDropdown() {
+      const select = $('recipientWfSelect');
+      if (!select) return;
+      const configured = new Set(Object.keys(recipientsState));
+      const available = Array.from(new Set(workflowList)).filter(w => !configured.has(w)).sort();
+      select.innerHTML = '<option value="">Search / select a workflow…</option>' +
+        available.map(w => '<option value="' + esc(w) + '">' + esc(w) + '</option>').join('');
+      // Re-enhance (SearchableSelect skips if already enhanced; force refresh of options)
+      if (window.SearchableSelect) {
+        if (select.dataset.enhanced === '1') {
+          // Rebuild the combobox to reflect the new option set
+          const wrap = select.parentNode.querySelector('.ss-wrap');
+          if (wrap) wrap.remove();
+          select.dataset.enhanced = '';
+          select.style.display = '';
+        }
+        SearchableSelect.enhance('recipientWfSelect');
+      }
+    }
+
+    // Render one editable row per configured recipient (sorted).
+    function renderRecipientRows() {
+      const keys = Object.keys(recipientsState).sort();
+      if (keys.length === 0) {
+        $('recipientsList').innerHTML = '<div class="recipient-empty">No per-workflow recipients set. All workflows use the default recipient above.</div>';
+        return;
+      }
+      $('recipientsList').innerHTML = keys.map(function (wf) {
+        return '<div class="recipient-row">' +
+          '<span class="recipient-wf" title="' + esc(wf) + '">' + esc(wf) + '</span>' +
+          '<input class="a-input recipient-input" data-wf="' + esc(wf) + '" type="text" placeholder="(uses default)" value="' + esc(recipientsState[wf] || '') + '">' +
+          '<button class="recipient-remove" type="button" data-wf="' + esc(wf) + '" title="Remove">×</button>' +
+          '</div>';
+      }).join('');
+      // Bind removers
+      document.querySelectorAll('#recipientsList .recipient-remove').forEach(function (btn) {
+        btn.onclick = function () {
+          delete recipientsState[btn.dataset.wf];
+          populateRecipientDropdown();
+          renderRecipientRows();
+        };
+      });
+    }
+
+    // Read the latest edits from the rows back into state, then return the map.
+    function collectRecipients() {
+      document.querySelectorAll('#recipientsList .recipient-input').forEach(function (inp) {
+        const wf = inp.dataset.wf;
+        const val = inp.value.trim();
+        if (wf) {
+          if (val) recipientsState[wf] = val;
+          else delete recipientsState[wf];
+        }
+      });
+      return Object.assign({}, recipientsState);
+    }
+
+    // Add button: take the selected workflow + email into state.
+    function bindRecipientAdd() {
+      const btn = $('recipientAddBtn');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        const wf = $('recipientWfSelect').value;
+        const email = $('recipientEmailInput').value.trim();
+        if (!wf) { $('recipientWfSelect').focus(); return; }
+        if (!email) { $('recipientEmailInput').focus(); return; }
+        recipientsState[wf] = email;
+        $('recipientEmailInput').value = '';
+        populateRecipientDropdown();
+        renderRecipientRows();
+      });
+    }
+
+    // ---- Priority buyers (keyword + display name) ----
+    function buyerRow(keyword, label) {
+      return '<div class="buyer-row">' +
+        '<input class="a-input buyer-keyword" type="text" placeholder="e.g. AEON" value="' + esc(keyword || '') + '">' +
+        '<input class="a-input buyer-label" type="text" placeholder="e.g. Aeon Malaysia" value="' + esc(label || '') + '">' +
+        '<button class="buyer-remove" type="button" title="Remove">×</button>' +
+        '</div>';
+    }
+
+    function renderBuyers(buyers, labels) {
+      buyers = buyers || [];
+      labels = labels || {};
+      const html = buyers.map(function (b) { return buyerRow(b, labels[b] || labels[String(b).toUpperCase()]); }).join('');
+      $('buyersList').innerHTML = html || '';
+      bindBuyerRemovers();
+    }
+
+    function bindBuyerRemovers() {
+      document.querySelectorAll('.buyer-remove').forEach(function (btn) {
+        btn.onclick = function () { btn.closest('.buyer-row').remove(); };
+      });
+    }
+
+    function collectBuyers() {
+      const buyers = [];
+      const labels = {};
+      document.querySelectorAll('#buyersList .buyer-row').forEach(function (row) {
+        const kw = row.querySelector('.buyer-keyword').value.trim().toUpperCase();
+        const lbl = row.querySelector('.buyer-label').value.trim();
+        if (kw) {
+          buyers.push(kw);
+          if (lbl) labels[kw] = lbl;
+        }
+      });
+      return { buyers, labels };
+    }
+
+    $('addBuyerBtn').addEventListener('click', function () {
+      $('buyersList').insertAdjacentHTML('beforeend', buyerRow('', ''));
+      bindBuyerRemovers();
+    });
+
+    // ---- Document types (checkboxes) ----
+    const ALL_DOC_TYPES = ['ORDERS', 'INVOIC', 'DEBADV', 'CREADV', 'ARINV'];
+
+    function renderDocTypes(selected) {
+      const sel = new Set((selected || []).map(t => String(t).toUpperCase()));
+      $('docTypesList').innerHTML = ALL_DOC_TYPES.map(function (t) {
+        const checked = sel.has(t) ? ' checked' : '';
+        return '<label class="doctype-chip">' +
+          '<input type="checkbox" class="doctype-cb" value="' + t + '"' + checked + '>' +
+          esc(t) + '</label>';
+      }).join('');
+    }
+
+    function collectDocTypes() {
+      const out = [];
+      document.querySelectorAll('.doctype-cb:checked').forEach(function (cb) { out.push(cb.value); });
+      return out;
+    }
+
+    // ---- Load / save ----
+    async function loadSettings() {
+      try {
+        const me = await (await fetch('/auth/me')).json();
+        if (!me.authenticated) { window.location.href = '/login'; return; }
+        $('whoami').textContent = '👤 ' + (me.username || 'admin');
+      } catch { window.location.href = '/login'; return; }
+
+      try { workflowList = await (await fetch('/api/workflows')).json(); } catch { workflowList = []; }
+
+      const s = await (await fetch('/api/admin/settings')).json();
+      $('emailRecipient').value = s.email.recipient || '';
+      $('emailSubject').value = s.email.subject || '';
+      $('emailBody').value = s.email.body || '';
+      $('reAlertMinutes').value = s.reAlertMinutes || 30;
+      // SMTP (password is never returned; hasPassword indicates one is stored)
+      const smtp = s.smtp || {};
+      $('smtpEnabled').checked = !!smtp.enabled;
+      $('smtpHost').value = smtp.host || '';
+      $('smtpPort').value = (smtp.port != null ? smtp.port : 587);
+      $('smtpSecure').value = smtp.secure ? 'true' : 'false';
+      $('smtpUser').value = smtp.user || '';
+      $('smtpPassword').value = '';
+      $('smtpPwdState').textContent = smtp.hasPassword ? '(stored — leave blank to keep)' : '(not set)';
+      $('smtpFromName').value = smtp.fromName || '';
+      $('smtpFromAddress').value = smtp.fromAddress || '';
+      renderRecipients(s.email.recipients);
+      renderBuyers(s.priorityBuyers, s.buyerLabels);
+      $('monitoredWorkflows').value = (Array.isArray(s.monitoredWorkflows) ? s.monitoredWorkflows : []).join('\n');
+      renderDocTypes(s.documentTypes);
+      const ds = s.dataSource || {};
+      $('dsQuery').value = ds.query || '';
+      $('dsRowCap').value = (ds.rowCap != null ? ds.rowCap : 0);
+      $('dsHistoryDays').value = (ds.historyDays != null ? ds.historyDays : 14);
+      $('dsAlertDays').value = (ds.alertDays != null ? ds.alertDays : 3);
+      loadConnections();
+    }
+
+    async function save() {
+      const status = $('saveStatus');
+      status.textContent = 'Saving...';
+      status.className = 'a-status';
+      const b = collectBuyers();
+      const payload = {
+        email: {
+          recipient: $('emailRecipient').value,
+          recipients: collectRecipients(),
+          subject: $('emailSubject').value,
+          body: $('emailBody').value
+        },
+        priorityBuyers: b.buyers,
+        buyerLabels: b.labels,
+        monitoredWorkflows: $('monitoredWorkflows').value.split(/\r?\n/).map(w => w.trim()).filter(Boolean),
+        documentTypes: collectDocTypes(),
+        reAlertMinutes: $('reAlertMinutes').value,
+        dataSource: { query: $('dsQuery').value, rowCap: $('dsRowCap').value, historyDays: $('dsHistoryDays').value, alertDays: $('dsAlertDays').value },
+        smtp: {
+          enabled: $('smtpEnabled').checked,
+          host: $('smtpHost').value,
+          port: $('smtpPort').value,
+          secure: $('smtpSecure').value === 'true',
+          user: $('smtpUser').value,
+          password: $('smtpPassword').value,   // blank = keep existing
+          fromName: $('smtpFromName').value,
+          fromAddress: $('smtpFromAddress').value
+        }
+      };
+      try {
+        const res = await fetch('/api/admin/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        const data = await res.json();
+        if (data.ok) {
+          status.textContent = '✓ Saved. Changes take effect immediately.';
+          status.className = 'a-status ok';
+          const s = data.settings;
+          $('reAlertMinutes').value = s.reAlertMinutes;
+          renderRecipients(s.email.recipients);
+          renderBuyers(s.priorityBuyers, s.buyerLabels);
+          renderDocTypes(s.documentTypes);
+          // Clear the password field and refresh the "stored" indicator.
+          $('smtpPassword').value = '';
+          if (s.smtp) $('smtpPwdState').textContent = s.smtp.password ? '(stored — leave blank to keep)' : '(not set)';
+        } else {
+          status.textContent = data.error || 'Save failed';
+          status.className = 'a-status err';
+        }
+      } catch (err) {
+        status.textContent = 'Could not save. Try again.';
+        status.className = 'a-status err';
+      }
+    }
+
+    $('saveBtn').addEventListener('click', save);
+
+    // ---- SMTP test (verify connection, or send a test email) ----
+    const smtpTestBtn = $('smtpTestBtn');
+    if (smtpTestBtn) {
+      smtpTestBtn.addEventListener('click', async () => {
+        const st = $('smtpStatus');
+        st.textContent = 'Testing…'; st.className = 'a-status';
+        try {
+          const to = $('smtpTestTo').value.trim();
+          const d = await (await fetch('/api/admin/test-smtp', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(to ? { to } : {})
+          })).json();
+          if (d.ok) { st.textContent = '✓ ' + (d.message || 'OK'); st.className = 'a-status ok'; }
+          else { st.textContent = '✗ ' + (d.error || 'Test failed'); st.className = 'a-status err'; }
+        } catch { st.textContent = '✗ Request failed'; st.className = 'a-status err'; }
+      });
+    }
+
+    // ---- Connections: render + per-connection test + test-all ----
+    let connectionsCache = [];
+
+    async function loadConnections() {
+      try {
+        const d = await (await fetch('/api/admin/connections')).json();
+        connectionsCache = d.connections || [];
+      } catch { connectionsCache = []; }
+      renderConnections();
+    }
+
+    function renderConnections() {
+      const el = $('connList');
+      if (!connectionsCache.length) {
+        el.innerHTML = '<div class="hint">No connections configured. Add TREND_DB1_* … in the server .env.</div>';
+        return;
+      }
+      el.innerHTML = connectionsCache.map(function (c) {
+        var engine = (c.client || 'mssql').toUpperCase();
+        return '<div class="conn-row" data-index="' + c.index + '">' +
+          '<div class="conn-info">' + esc(c.name) +
+            ' <span class="conn-engine">' + esc(engine) + '</span>' +
+            '<small>' + esc(c.host || '(no host)') + (c.database ? ' / ' + esc(c.database) : '') + (c.configured ? '' : ' — not configured') + '</small>' +
+          '</div>' +
+          '<span class="conn-result" data-role="result"></span>' +
+          '<button class="btn-sm conn-test" type="button">Test</button>' +
+        '</div>';
+      }).join('');
+      el.querySelectorAll('.conn-test').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const row = btn.closest('.conn-row');
+          testOne(parseInt(row.dataset.index, 10), row.querySelector('[data-role=result]'));
+        });
+      });
+    }
+
+    async function testOne(index, resultEl) {
+      resultEl.textContent = 'testing…'; resultEl.className = 'conn-result';
+      try {
+        const d = await (await fetch('/api/admin/test-db', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ index })
+        })).json();
+        if (d.ok) { resultEl.textContent = '✓ ' + (d.elapsedMs != null ? d.elapsedMs + 'ms' : 'OK'); resultEl.className = 'conn-result ok'; }
+        else { resultEl.textContent = '✗ ' + (d.error || 'failed'); resultEl.className = 'conn-result err'; resultEl.title = d.error || ''; }
+      } catch { resultEl.textContent = '✗ request failed'; resultEl.className = 'conn-result err'; }
+    }
+
+    $('testAllBtn').addEventListener('click', async () => {
+      const st = $('connStatus');
+      st.textContent = 'Testing all…'; st.className = 'a-status';
+      // Fire each row's test
+      const rows = Array.from(document.querySelectorAll('#connList .conn-row'));
+      await Promise.all(rows.map(row => testOne(parseInt(row.dataset.index, 10), row.querySelector('[data-role=result]'))));
+      st.textContent = 'Done.'; st.className = 'a-status ok';
+    });
+
+    async function reloadData(statusEl) {
+      const st = statusEl;
+      st.textContent = 'Reloading…'; st.className = 'a-status';
+      try {
+        const d = await (await fetch('/api/admin/reload-data', { method: 'POST' })).json();
+        if (d.ok) { st.textContent = '✓ Reloaded — ' + d.totalRecords + ' records, ' + d.workflows + ' workflows'; st.className = 'a-status ok'; }
+        else { st.textContent = '✗ ' + (d.error || 'Reload failed'); st.className = 'a-status err'; }
+      } catch (err) { st.textContent = '✗ Request failed'; st.className = 'a-status err'; }
+    }
+    $('reloadDataBtn').addEventListener('click', () => reloadData($('dsStatus')));
+    $('reloadDataBtn2').addEventListener('click', () => reloadData($('trendsStatus')));
+
+    // ---- Trend snapshot: info + manual rebuild ----
+    async function loadSnapshotInfo() {
+      const el = $('snapInfo');
+      if (!el) return;
+      try {
+        const d = await (await fetch('/api/admin/trend-snapshot-info')).json();
+        if (!d.ok) { el.textContent = 'Could not load snapshot info.'; return; }
+        const cur = d.current;
+        const badge = d.isCurrent
+          ? '<span class="snap-badge ok">Up to date</span>'
+          : '<span class="snap-badge stale">Will rebuild on next start / 15th</span>';
+        const gen = d.generatedAt ? new Date(d.generatedAt).toLocaleString() : '—';
+        el.innerHTML =
+          '<div class="k">Current window</div><div class="v">' + (cur ? esc(cur.label) : '— none yet —') + ' ' + badge + '</div>' +
+          '<div class="k">Target window (today)</div><div class="v">' + esc(d.target.label) + '</div>' +
+          '<div class="k">Snapshot rows</div><div class="v">' + (d.rows || 0).toLocaleString() + '</div>' +
+          '<div class="k">Last built</div><div class="v">' + esc(gen) + '</div>';
+      } catch { el.textContent = 'Could not load snapshot info.'; }
+    }
+
+    const refreshBtn = $('refreshSnapBtn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', async () => {
+        const st = $('snapStatus');
+        st.textContent = 'Rebuilding from DB… (this reads the database)'; st.className = 'a-status';
+        try {
+          const d = await (await fetch('/api/admin/refresh-trend-snapshot', { method: 'POST' })).json();
+          if (d.ok) { st.textContent = '✓ Snapshot rebuilt — ' + (d.rows || 0) + ' rows for ' + d.window; st.className = 'a-status ok'; loadSnapshotInfo(); }
+          else { st.textContent = '✗ ' + (d.error || 'Rebuild failed'); st.className = 'a-status err'; }
+        } catch { st.textContent = '✗ Request failed'; st.className = 'a-status err'; }
+      });
+    }
+    loadSnapshotInfo();
+
+    $('logoutBtn').addEventListener('click', async () => {
+      await fetch('/auth/logout', { method: 'POST' });
+      window.location.href = '/login';
+    });
+
+    bindRecipientAdd();
+    loadSettings();
+  </script>
+</body>
+</html>

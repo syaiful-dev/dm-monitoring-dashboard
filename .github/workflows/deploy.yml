@@ -1,0 +1,49 @@
+name: Deploy (on-premise Linux)
+
+# Continuous Deployment to the on-premise Linux server using a SELF-HOSTED
+# GitHub Actions runner installed on (or inside the network of) that server.
+# GitHub-hosted runners cannot reach an internal host.
+#
+# Trigger: after the CI workflow succeeds on `main`, or manually (workflow_dispatch).
+#
+# ONE-TIME SETUP
+#   1. Server: follow the Technical Document, sections 7 and 8 (Node, PM2, nginx,
+#      app cloned to /home/dmapp/app, production .env created, first start done).
+#   2. Install a self-hosted runner as the app user (dmapp):
+#      GitHub repo > Settings > Actions > Runners > New self-hosted runner (Linux),
+#      then `sudo ./svc.sh install dmapp && sudo ./svc.sh start`.
+#      Give it the label `dm-prod` when running ./config.sh.
+#   3. GitHub repo > Settings > Secrets and variables > Actions > Variables:
+#        DEPLOY_ENABLED = true
+#        APP_DIR        = /home/dmapp/app      (optional, this is the default)
+#   4. Settings > Environments > production: add required reviewers so every
+#      production deploy needs an approval.
+#
+# The .env and config/settings.json live ONLY on the server. This workflow never
+# touches secrets.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      vars.DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: [self-hosted, linux, dm-prod]
+    environment: production
+    steps:
+      - name: Run deploy script
+        env:
+          APP_DIR: ${{ vars.APP_DIR || '/home/dmapp/app' }}
+        run: |
+          cd "$APP_DIR"
+          bash deploy/deploy.sh

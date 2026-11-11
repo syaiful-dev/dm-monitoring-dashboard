@@ -2,11 +2,16 @@
 // Shared chart configuration and utilities
 
 const Charts = (() => {
-  // Global Chart.js defaults
-  Chart.defaults.color = '#9aa0a6';
-  Chart.defaults.borderColor = '#37474f';
-  Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif';
-  Chart.defaults.font.size = 12;
+  // Global Chart.js defaults — guarded in case the Chart.js CDN didn't load
+  const hasChart = typeof Chart !== 'undefined';
+  if (hasChart) {
+    Chart.defaults.color = '#9aa0a6';
+    Chart.defaults.borderColor = '#37474f';
+    Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif';
+    Chart.defaults.font.size = 12;
+  } else {
+    console.warn('[Charts] Chart.js not loaded — charts will be skipped.');
+  }
 
   const COLORS = {
     blue: '#4fc3f7',
@@ -39,6 +44,7 @@ const Charts = (() => {
    * Create a line chart
    */
   function createLineChart(canvasId, config) {
+    if (!hasChart) return null;
     destroy(canvasId);
     const ctx = document.getElementById(canvasId);
     if (!ctx) return null;
@@ -92,6 +98,7 @@ const Charts = (() => {
    * Create a horizontal bar chart (for timeline)
    */
   function createBarChart(canvasId, config) {
+    if (!hasChart) return null;
     destroy(canvasId);
     const ctx = document.getElementById(canvasId);
     if (!ctx) return null;

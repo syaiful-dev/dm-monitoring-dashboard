@@ -4,7 +4,9 @@
 const Trends = (() => {
   let workflows = [];
   let selectedWorkflow = 'ALL';
-  let selectedDays = 30;
+  // Fixed to the configured history window (14 days). The dashboard caches only
+  // this window, so there is no user range control — we always show all of it.
+  const selectedDays = 14;
   let initialized = false;
 
   async function load() {
@@ -13,6 +15,19 @@ const Trends = (() => {
       initialized = true;
     }
     await loadTrendData();
+    // Sync the Workflow File Trend Analysis box to the current selection.
+    if (typeof Insights !== 'undefined' && Insights.show) Insights.show(selectedWorkflow);
+    // Show the actual snapshot window (e.g. "Snapshot: Sep 2026 (15–30)").
+    updateWindowNote();
+  }
+
+  async function updateWindowNote() {
+    const note = document.getElementById('trendWindowNote');
+    if (!note) return;
+    try {
+      const w = await App.api('trend-window');
+      if (w && w.label) note.textContent = 'Snapshot: ' + w.label;
+    } catch (_) { /* leave default */ }
   }
 
   async function initControls() {
@@ -26,22 +41,15 @@ const Trends = (() => {
         select.addEventListener('change', () => {
           selectedWorkflow = select.value;
           loadTrendData();
+          // Keep the Workflow File Trend Analysis box in sync with this selector.
+          if (typeof Insights !== 'undefined' && Insights.show) Insights.show(selectedWorkflow);
         });
+
+        if (window.SearchableSelect) SearchableSelect.enhance('trendWorkflowSelect');
       }
     } catch (err) {
       console.error('Failed to load trend workflows:', err);
     }
-
-    // Date range buttons
-    const dayBtns = document.querySelectorAll('#tab-trends .btn-group .btn-sm[data-days]');
-    dayBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        dayBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        selectedDays = parseInt(btn.dataset.days, 10);
-        loadTrendData();
-      });
-    });
   }
 
   async function loadTrendData() {
@@ -146,25 +154,28 @@ const Trends = (() => {
       return;
     }
 
-    // Group by date and get avg size
-    const dailySizes = {};
+    // The backend already returns one pre-aggregated point per day with the
+    // daily avg (size_kb) and daily max (max_size_kb). Merge defensively in case
+    // multiple points share a day.
+    const dailyAgg = {};
     sizes.forEach(s => {
       const date = s.date ? s.date.split(' ')[0] : null;
       if (!date) return;
-      if (!dailySizes[date]) dailySizes[date] = [];
-      dailySizes[date].push(s.size_kb);
+      if (!dailyAgg[date]) dailyAgg[date] = { avg: [], max: 0 };
+      if (s.size_kb != null) dailyAgg[date].avg.push(s.size_kb);
+      if (s.max_size_kb != null) dailyAgg[date].max = Math.max(dailyAgg[date].max, s.max_size_kb);
     });
 
-    const sortedDates = Object.keys(dailySizes).sort();
+    const sortedDates = Object.keys(dailyAgg).sort();
     const labels = sortedDates.map(d => {
       const date = new Date(d);
       return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     });
     const avgSizes = sortedDates.map(d => {
-      const arr = dailySizes[d];
-      return Math.round(arr.reduce((s, v) => s + v, 0) / arr.length * 100) / 100;
+      const arr = dailyAgg[d].avg;
+      return arr.length ? Math.round(arr.reduce((s, v) => s + v, 0) / arr.length * 100) / 100 : 0;
     });
-    const maxSizes = sortedDates.map(d => Math.max(...dailySizes[d]));
+    const maxSizes = sortedDates.map(d => dailyAgg[d].max);
 
     Charts.createLineChart('sizeTrendChart', {
       data: {

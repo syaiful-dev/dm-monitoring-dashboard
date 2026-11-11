@@ -17,34 +17,10 @@ const SocketManager = (() => {
       updateConnectionStatus(false);
     });
 
-    // New file received
-    socket.on('file:received', (data) => {
-      console.log('[Socket] File received:', data.file_name);
-      
-      // Refresh dashboard if on overview tab
-      if (App.getActiveTab() === 'overview') {
-        Dashboard.load();
-      }
-    });
-
-    // New alert
-    socket.on('alert:new', (data) => {
-      console.log('[Socket] New alert:', data.title);
-      
-      // Refresh alerts if on alerts tab
-      if (App.getActiveTab() === 'alerts') {
-        Alerts.load();
-      }
-
-      // Update chatbot badge
-      Chatbot.incrementBadge();
-    });
-
-    // Status update
-    socket.on('status:update', () => {
-      if (App.getActiveTab() === 'overview') {
-        Dashboard.load();
-      }
+    // Refresh alerts + badge when a new alert arrives and we're on the Alerts tab
+    socket.on('alert:new', () => {
+      if (App.getActiveTab() === 'alerts' && window.Alerts) Alerts.load();
+      if (App.updateAlertsBadge) App.updateAlertsBadge();
     });
   }
 

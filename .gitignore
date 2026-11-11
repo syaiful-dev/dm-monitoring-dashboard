@@ -12,4 +12,27 @@ dist/
 # Exclude everything in Trenddata (real eHub CSVs), but allow fictional dummy data
 data/Trenddata/*
 !data/Trenddata/sample_orders_*.csv
+!data/Trenddata/sample/
 Prompt/
+
+# Internal documents (architecture, internal hosts, production screenshots) — share internally only
+DM_Monitoring_Dashboard_Technical_Document.docx
+DM_Monitoring_Dashboard.pptx
+
+# Pentaho/Hop migration workspace — contains production connection details and passwords
+hop-migration/
+
+# Runtime alert state (regenerated at runtime, not source)
+data/alertStates.json
+
+# Archived/unused files kept locally for reference only
+archive/
+
+# Runtime admin settings (edited via /admin at runtime)
+config/settings.json
+
+# Runtime trend snapshot (monthly 1-14 aggregate cache, regenerated from DB)
+data/trendSnapshot.json
+
+# Screenshot / deck build scratch (local only)
+_shots/

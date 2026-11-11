@@ -5,112 +5,106 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DM Monitoring Dashboard</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/css/style.css">
-  <link rel="stylesheet" href="/css/chatbot.css">
+  <link rel="stylesheet" href="/css/style.css?v=2">
+  <link rel="stylesheet" href="/css/assistant.css?v=10">
+  <link rel="stylesheet" href="/css/pentaho-error.css?v=12">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
+  <!-- Global loading overlay (shown during API calls / long actions) -->
+  <div class="app-loader" id="appLoader" aria-hidden="true" role="status" aria-live="polite">
+    <div class="app-loader-box">
+      <div class="app-spinner"></div>
+      <div class="app-loader-text" id="appLoaderText">Loading…</div>
+    </div>
+  </div>
+
   <!-- Header -->
   <header class="header">
     <div class="header-left">
       <h1 class="header-title">DM Monitoring Dashboard</h1>
     </div>
     <div class="header-right">
-      <button class="btn-export" id="exportPdfBtn" title="Export current tab to PDF">📄 Export PDF</button>
       <span class="data-source-badge" id="dataSourceBadge">
-        <span class="badge-icon">📁</span>
-        <span class="badge-text">JSON Mode</span>
+        <span class="badge-icon">🗄️</span>
+        <span class="badge-text">MSSQL Database</span>
       </span>
       <span class="connection-status" id="connectionStatus">
         <span class="status-dot connected"></span>
         <span>Connected</span>
       </span>
       <span class="live-clock" id="liveClock"></span>
+      <a href="/admin" class="admin-link" title="Admin configuration">⚙️ Admin</a>
     </div>
   </header>
 
   <!-- Tab Navigation -->
   <nav class="tab-bar">
-    <button class="tab-btn active" data-tab="overview">
-      <span class="tab-icon">🏠</span>
-      <span class="tab-label">Overview</span>
+    <button class="tab-btn active" data-tab="alerts">
+      <span class="tab-icon">🔔</span>
+      <span class="tab-label">Alerts</span>
+      <span class="tab-badge" id="alertsTabBadge" style="display:none;">0</span>
     </button>
     <button class="tab-btn" data-tab="trends">
       <span class="tab-icon">📊</span>
-      <span class="tab-label">Trends</span>
+      <span class="tab-label">Trends &amp; Analysis</span>
     </button>
-    <button class="tab-btn" data-tab="files">
-      <span class="tab-icon">📁</span>
-      <span class="tab-label">Files</span>
+    <button class="tab-btn" data-tab="pentaho">
+      <span class="tab-icon">🛠️</span>
+      <span class="tab-label">ETL Errors</span>
     </button>
-    <button class="tab-btn" data-tab="alerts">
-      <span class="tab-icon">🔔</span>
-      <span class="tab-label">Alerts</span>
-    </button>
-    <button class="tab-btn" data-tab="insights">
-      <span class="tab-icon">🤖</span>
-      <span class="tab-label">AI Insights</span>
+    <!-- File Details tab hidden for now (not in use yet). Remove style="display:none" to re-enable. -->
+    <button class="tab-btn" data-tab="filedetails" style="display:none;">
+      <span class="tab-icon">🔎</span>
+      <span class="tab-label">File Details</span>
     </button>
   </nav>
 
   <!-- Tab Content -->
   <main class="content">
-    <!-- Overview Tab -->
-    <section class="tab-content active" id="tab-overview">
-      <div class="kpi-cards" id="kpiCards">
-        <div class="kpi-card">
-          <div class="kpi-value" id="kpiWorkflows">-</div>
-          <div class="kpi-label">Workflows</div>
-        </div>
-        <div class="kpi-card kpi-green">
-          <div class="kpi-value" id="kpiOnTime">-</div>
-          <div class="kpi-label">Completion Rate</div>
-        </div>
-        <div class="kpi-card kpi-yellow">
-          <div class="kpi-value" id="kpiDelayed">-</div>
-          <div class="kpi-label">In Progress (45)</div>
-        </div>
-        <div class="kpi-card kpi-red">
-          <div class="kpi-value" id="kpiMissing">-</div>
-          <div class="kpi-label">Errors (999)</div>
-        </div>
-        <div class="kpi-card kpi-purple">
-          <div class="kpi-value" id="kpiAlerts">-</div>
-          <div class="kpi-label">Total Documents</div>
+    <!-- Alerts Tab (default) -->
+    <section class="tab-content active" id="tab-alerts">
+      <div class="ma-summary" id="maSummary"></div>
+
+      <div class="filter-bar">
+        <div class="btn-group ma-filter-tabs">
+          <button class="btn-sm active" data-status="">📋 Open</button>
+          <button class="btn-sm" data-status="new">🔴 Active</button>
+          <button class="btn-sm" data-status="review">📧 In Review</button>
+          <button class="btn-sm" data-status="resolved">✅ Resolved</button>
+          <button class="btn-sm" data-status="ignored">🚫 Ignored</button>
         </div>
       </div>
 
-      <div class="overview-grid">
-        <div class="card">
-          <h3 class="card-title">Documents by Workflow</h3>
-          <div class="chart-container">
-            <canvas id="healthTimelineChart"></canvas>
+      <div class="ma-grid">
+        <div class="card ma-list-card">
+          <h3 class="card-title">Missing-File Alerts</h3>
+          <div id="maList" class="ma-list"></div>
+        </div>
+        <div class="card ma-detail-card">
+          <h3 class="card-title">Alert Details</h3>
+          <div id="maDetail" class="ma-detail">
+            <p class="ma-placeholder">Select an alert on the left to view its details.</p>
           </div>
         </div>
-        <div class="card">
-          <h3 class="card-title">AI Anomaly Summary</h3>
-          <div id="anomalySummary" class="anomaly-summary"></div>
-        </div>
       </div>
 
-      <div class="card">
-        <h3 class="card-title">Recent Documents</h3>
-        <div class="table-container">
-          <table class="data-table" id="todayStatusTable">
-            <thead>
-              <tr>
-                <th>Workflow</th>
-                <th>File Name</th>
-                <th>Size (KB)</th>
-                <th>Received</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="todayStatusBody"></tbody>
-          </table>
+      <!-- Email draft modal (shown when Review is clicked) -->
+      <div class="email-modal" id="emailModal" style="display:none;">
+        <div class="email-modal-box">
+          <h3 class="email-modal-title">📧 Email Draft — Notify Client</h3>
+          <label class="email-label">To</label>
+          <input type="text" id="emailTo" class="email-input">
+          <label class="email-label">Subject</label>
+          <input type="text" id="emailSubject" class="email-input">
+          <label class="email-label">Message</label>
+          <textarea id="emailBody" class="email-textarea" rows="12"></textarea>
+          <div class="email-modal-actions">
+            <button class="ma-btn ma-btn-review" id="emailSendBtn">Send</button>
+            <button class="ma-btn" id="emailCancelBtn">Cancel</button>
+          </div>
+          <p class="email-modal-note">Sends the email via the SMTP server configured in Admin → Email, then marks the alert as "In Review". If SMTP isn't set up, sending will report an error.</p>
         </div>
       </div>
     </section>
@@ -123,16 +117,11 @@
           <select id="trendWorkflowSelect" class="filter-select"></select>
         </div>
         <div class="filter-group">
-          <label>Range:</label>
-          <div class="btn-group">
-            <button class="btn-sm" data-days="7">7d</button>
-            <button class="btn-sm active" data-days="14">14d</button>
-            <button class="btn-sm" data-days="30">30d</button>
-            <button class="btn-sm" data-days="90">90d</button>
-          </div>
+          <span class="range-note" id="trendWindowNote">Half-month snapshot</span>
         </div>
       </div>
 
+      <!-- 1. Trend charts -->
       <div class="trends-grid">
         <div class="card">
           <h3 class="card-title">Arrival Time Trend</h3>
@@ -148,164 +137,167 @@
         </div>
       </div>
 
+      <!-- 2. Workflow File Trend Analysis -->
+      <div class="card card-full">
+        <h3 class="card-title">📊 Workflow File Trend Analysis</h3>
+        <div id="workflowAnalysis"></div>
+      </div>
+
+      <!-- 3. Insights -->
       <div class="card">
-        <h3 class="card-title">AI Insights</h3>
+        <h3 class="card-title">Insights</h3>
         <div id="trendInsights" class="insights-text"></div>
       </div>
     </section>
 
-    <!-- Files Tab -->
-    <section class="tab-content" id="tab-files">
-      <div class="filter-bar">
-        <div class="filter-group">
-          <label for="fileWorkflowSelect">Workflow:</label>
-          <select id="fileWorkflowSelect" class="filter-select">
-            <option value="">All Workflows</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label for="fileDateFrom">From:</label>
-          <input type="date" id="fileDateFrom" class="filter-input">
-        </div>
-        <div class="filter-group">
-          <label for="fileDateTo">To:</label>
-          <input type="date" id="fileDateTo" class="filter-input">
-        </div>
-        <div class="filter-group">
-          <label for="fileStatusSelect">Status:</label>
-          <select id="fileStatusSelect" class="filter-select">
-            <option value="">All</option>
-          </select>
-        </div>
-        <button class="btn-primary" id="fileFilterBtn">Apply</button>
-      </div>
+    <!-- ETL Errors Tab -->
+    <section class="tab-content" id="tab-pentaho">
+      <div class="pe-root">
+        <section id="view-errors" class="view" aria-labelledby="errors-title">
+          <header class="page-head">
+            <div>
+              <p class="eyebrow">Pipeline health</p>
+              <h1 id="errors-title">ETL errors</h1>
+              <p class="subtle" id="error-source-note"></p>
+            </div>
+          </header>
 
+          <div class="kpi-grid error-kpis">
+            <article class="kpi-card"><span>Logs checked</span><strong id="error-logs">—</strong><small id="error-logs-note"></small></article>
+            <article class="kpi-card"><span>Root causes</span><strong id="error-groups">—</strong><small>Repeated copies grouped together</small></article>
+            <article class="kpi-card good"><span>Expected no-data ignored</span><strong id="error-benign">—</strong><small>Not treated as an error</small></article>
+            <article class="kpi-card"><span>Incidents</span><strong id="error-lines">—</strong><small id="error-noise-note"></small></article>
+          </div>
+
+          <article class="panel">
+            <div class="filter-row">
+              <label class="field grow"><span>Search</span><input id="error-search" type="search" placeholder="Error, step, or log"></label>
+              <label class="field"><span>Priority</span><select id="error-severity"><option value="ALL">All</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option></select></label>
+            </div>
+            <div class="result-line"><span id="error-result-count"></span><span id="error-page-label"></span></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Priority</th><th>Root cause</th><th>Step</th><th>Status</th><th>Latest</th><th>Incidents</th><th></th></tr></thead>
+                <tbody id="error-table-body"></tbody>
+              </table>
+            </div>
+            <div class="pager">
+              <button id="error-prev" class="secondary-button" type="button">Previous</button>
+              <button id="error-next" class="secondary-button" type="button">Next</button>
+            </div>
+          </article>
+        </section>
+      </div>
+    </section>
+
+    <!-- File Details Tab -->
+    <section class="tab-content" id="tab-filedetails">
       <div class="card">
-        <div class="table-container">
-          <table class="data-table" id="fileTable">
-            <thead>
-              <tr>
-                <th>Workflow</th>
-                <th>File Name</th>
-                <th>Size (KB)</th>
-                <th>Received</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="fileTableBody"></tbody>
-          </table>
-        </div>
-        <div class="pagination" id="filePagination"></div>
-      </div>
-
-      <!-- File detail expand panel -->
-      <div class="card file-detail-panel" id="fileDetailPanel" style="display:none;">
-        <h3 class="card-title">File Details</h3>
-        <div id="fileDetailContent"></div>
-      </div>
-    </section>
-
-    <!-- Alerts Tab -->
-    <section class="tab-content" id="tab-alerts">
-      <div class="filter-bar">
-        <div class="btn-group alert-filter-tabs">
-          <button class="btn-sm active" data-severity="">All</button>
-          <button class="btn-sm" data-severity="critical">🔴 Critical</button>
-          <button class="btn-sm" data-severity="warning">🟡 Warning</button>
-          <button class="btn-sm" data-severity="info">ℹ️ Info</button>
-        </div>
-      </div>
-
-      <div class="alerts-grid">
-        <div class="card alerts-list-card">
-          <h3 class="card-title">Alert List</h3>
-          <div id="alertsList" class="alerts-list"></div>
-        </div>
-        <div class="card">
-          <h3 class="card-title">Alert Statistics</h3>
-          <div id="alertStats" class="alert-stats"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- AI Insights Tab -->
-    <section class="tab-content" id="tab-insights">
-      <div class="card card-full">
-        <h3 class="card-title">📊 Workflow File Trend Analysis</h3>
-        <div class="filter-bar" style="margin-bottom:12px;padding:8px 12px;">
-          <div class="filter-group">
-            <label for="analysisWorkflowSelect">Workflow:</label>
-            <select id="analysisWorkflowSelect" class="filter-select"></select>
+        <h3 class="card-title">🔎 Look up a document</h3>
+        <div class="hint">Select a database (required), then optionally narrow by DOCID and/or WORKFLOWID. Leave both blank to see the latest documents.</div>
+        <div class="fd-search">
+          <div class="fd-field">
+            <label for="fdDatabase">Database <span class="fd-req">*</span></label>
+            <select id="fdDatabase" class="filter-select"></select>
+          </div>
+          <div class="fd-field">
+            <label for="fdDocId">DOCID <span class="fd-opt">(optional)</span></label>
+            <input id="fdDocId" class="a-input" type="text" placeholder="e.g. 123456">
+          </div>
+          <div class="fd-field">
+            <label for="fdWorkflowId">WORKFLOWID <span class="fd-opt">(optional)</span></label>
+            <input id="fdWorkflowId" class="a-input" type="text" placeholder="e.g. INVOIC_AEON_…">
+          </div>
+          <div class="fd-field fd-actions">
+            <button id="fdSearchBtn" class="btn-primary" type="button">Search</button>
           </div>
         </div>
-        <div id="workflowAnalysis"></div>
+        <span class="a-status" id="fdStatus"></span>
       </div>
 
-      <div class="insights-grid">
-        <div class="card card-full">
-          <h3 class="card-title">🤖 AI Summary</h3>
-          <div id="weeklySummary" class="summary-text"></div>
-        </div>
-      </div>
-
-      <!-- SLA Compliance -->
-      <div class="card" style="margin-top:16px;">
-        <h3 class="card-title">📋 SLA Compliance</h3>
-        <div id="slaCompliance"></div>
-      </div>
-
-      <!-- Week-over-Week -->
-      <div class="card" style="margin-top:16px;">
-        <h3 class="card-title">📈 Week-over-Week Comparison</h3>
-        <div id="weekOverWeek"></div>
-      </div>
-
-      <!-- Health Heatmap -->
-      <div class="card" style="margin-top:16px;">
-        <h3 class="card-title">🟩 Workflow Health Heatmap (Last 14 Days)</h3>
-        <div id="healthHeatmap" style="overflow-x:auto;"></div>
-      </div>
-
-      <!-- Trading Partner Activity -->
-      <div class="card" style="margin-top:16px;">
-        <h3 class="card-title">🤝 Trading Partner Activity</h3>
-        <div id="tradingPartners"></div>
-      </div>
+      <div id="fdResults" class="fd-results"></div>
     </section>
   </main>
 
-  <!-- Chatbot -->
-  <div class="chatbot-toggle" id="chatbotToggle">
-    <span class="chatbot-icon">💬</span>
-    <span class="chatbot-badge" id="chatbotBadge" style="display:none;">0</span>
-  </div>
+  <!-- ETL error detail dialog (native <dialog>, styles scoped by its id) -->
+  <dialog id="error-dialog" class="modal error-modal">
+    <div class="modal-head"><div><p class="eyebrow">ETL issue</p><h2 id="error-dialog-title"></h2></div><button class="icon-button" type="button" data-close="error-dialog" aria-label="Close">×</button></div>
+    <div id="error-dialog-meta" class="detail-grid"></div>
 
-  <div class="chatbot-panel" id="chatbotPanel">
-    <div class="chatbot-header">
-      <div class="chatbot-header-left">
-        <span class="chatbot-avatar">🤖</span>
-        <span class="chatbot-name">DM Assistant</span>
+    <div id="error-dialog-analysis" class="analysis-grid"></div>
+
+    <div><p class="detail-label">Root cause</p><pre id="error-dialog-sample"></pre></div>
+    <p id="error-dialog-lines" class="subtle"></p>
+
+    <div class="fix-box">
+      <p class="detail-label">Suggested fix</p>
+      <div id="error-dialog-fix" class="fix-text"></div>
+    </div>
+
+    <div class="log-block">
+      <p class="detail-label">Raw context</p>
+      <pre id="error-dialog-raw" class="raw-context"></pre>
+    </div>
+
+    <div class="status-row">
+      <div class="status-current">
+        <span class="detail-label">Status</span>
+        <span id="error-dialog-status" class="status-badge">New</span>
       </div>
-      <button class="chatbot-minimize" id="chatbotMinimize">−</button>
+      <div class="status-buttons">
+        <button id="error-dialog-refix" class="secondary-button" type="button">Refix (reopen)</button>
+        <button id="error-dialog-advance" class="primary-button" type="button"></button>
+      </div>
     </div>
-    <div class="chatbot-messages" id="chatbotMessages"></div>
-    <div class="chatbot-suggestions" id="chatbotSuggestions"></div>
-    <div class="chatbot-input-area">
-      <input type="text" id="chatbotInput" class="chatbot-input" placeholder="Ask about your pipelines..." autocomplete="off">
-      <button id="chatbotSend" class="chatbot-send-btn">➤</button>
+    <p id="error-dialog-status-hint" class="subtle status-hint"></p>
+
+    <div class="comment-box">
+      <label class="field"><span id="error-dialog-comment-label">Comment from person in charge</span>
+        <textarea id="error-dialog-comment" rows="2" placeholder="What was checked or changed to resolve this?"></textarea>
+      </label>
+      <button id="error-dialog-comment-add" class="secondary-button" type="button">Add comment</button>
+    </div>
+
+    <div class="log-block">
+      <p class="detail-label">Status history</p>
+      <div id="error-dialog-history" class="history-log"></div>
+    </div>
+    <div class="log-block">
+      <p class="detail-label">Comments</p>
+      <div id="error-dialog-comment-log" class="comment-log"></div>
+    </div>
+  </dialog>
+
+  <!-- AI Assistant (Amazon Quick agent, embedded) -->
+  <div class="assistant-toggle" id="assistantToggle" title="AI Assistant">
+    <span class="assistant-icon">💬</span>
+  </div>
+  <div class="assistant-panel" id="assistantPanel">
+    <div class="assistant-header">
+      <div class="assistant-header-left">
+        <span class="assistant-avatar">🤖</span>
+        <span class="assistant-name">AI Assistant</span>
+      </div>
+      <button class="assistant-minimize" id="assistantMinimize">−</button>
+    </div>
+    <div class="assistant-body" id="assistantBody">
+      <div class="assistant-loading" id="assistantLoading">Loading…</div>
     </div>
   </div>
 
-  <!-- Scripts -->
-  <script src="/js/app.js"></script>
-  <script src="/js/socket.js"></script>
-  <script src="/js/charts.js"></script>
-  <script src="/js/dashboard.js"></script>
-  <script src="/js/trends.js"></script>
-  <script src="/js/fileExplorer.js"></script>
-  <script src="/js/alerts.js"></script>
-  <script src="/js/insights.js"></script>
-  <script src="/js/chatbot.js"></script>
-  <script src="/js/exportPdf.js"></script>
+  <!-- Scripts (versioned to bypass browser cache) -->
+  <script src="/js/app.js?v=12"></script>
+  <script src="/js/searchableSelect.js?v=10"></script>
+  <script src="/js/socket.js?v=10"></script>
+  <script src="/js/charts.js?v=10"></script>
+  <script src="/js/trends.js?v=15"></script>
+  <script src="/js/alerts.js?v=13"></script>
+  <script src="/js/insights.js?v=11"></script>
+  <script src="/js/filedetails.js?v=6"></script>
+  <script src="/js/assistant.js?v=10"></script>
+  <!-- ETL Errors module (data embed + service + logic) -->
+  <script src="/js/pentaho-ai-issues.data.js?v=10"></script>
+  <script src="/js/pentaho-data-service.js?v=10"></script>
+  <script src="/js/pentaho-error.js?v=10"></script>
 </body>
 </html>

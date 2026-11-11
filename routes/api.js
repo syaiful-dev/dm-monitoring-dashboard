@@ -1,101 +1,155 @@
-// API Routes — all endpoints powered by real eHub CSV data via trendDataService
+// API Routes — endpoints for the 3-tab support dashboard (Alerts, Trends, Analysis)
 const express = require('express');
 const router = express.Router();
 const trendDataService = require('../services/trendDataService');
-const config = require('../config/dataSource');
-
-// ===================== OVERVIEW =====================
-
-// GET /api/overview — KPI data + today's status
-router.get('/overview', (req, res) => {
-  try {
-    const overview = trendDataService.getOverviewStats();
-    res.json(overview);
-  } catch (err) {
-    console.error('Error fetching overview:', err);
-    res.status(500).json({ error: 'Failed to fetch overview data' });
-  }
-});
+const missingFileAlertService = require('../services/missingFileAlertService');
+const alertStateStore = require('../services/alertStateStore');
+const settingsService = require('../services/settingsService');
+const trendSource = require('../config/trendSource');
+const fileDetailsService = require('../services/fileDetailsService');
+const requireAuth = require('../middleware/requireAuth');
 
 // GET /api/workflows — Distinct workflow IDs
 router.get('/workflows', (req, res) => {
   try {
-    const workflows = trendDataService.getDistinctWorkflows();
-    res.json(workflows);
+    res.json(trendDataService.getDistinctWorkflows());
   } catch (err) {
     console.error('Error fetching workflows:', err);
     res.status(500).json({ error: 'Failed to fetch workflows' });
   }
 });
 
-// ===================== FILES =====================
-
-// GET /api/files — File records from Trenddata CSVs
-router.get('/files', (req, res) => {
-  try {
-    const filters = {
-      workflow_id: req.query.workflow_id,
-      status: req.query.status,
-      date_from: req.query.date_from,
-      date_to: req.query.date_to,
-      page: req.query.page,
-      limit: req.query.limit
-    };
-    const result = trendDataService.getRecords(filters);
-    res.json(result);
-  } catch (err) {
-    console.error('Error fetching files:', err);
-    res.status(500).json({ error: 'Failed to fetch file records' });
-  }
-});
-
-// GET /api/files/workflows — Distinct workflow IDs for filter dropdown
+// Used by the Trends tab workflow dropdown
 router.get('/files/workflows', (req, res) => {
   try {
-    const workflows = trendDataService.getDistinctWorkflows();
-    res.json(workflows);
+    res.json(trendDataService.getDistinctWorkflows());
   } catch (err) {
-    console.error('Error fetching file workflows:', err);
+    console.error('Error fetching workflow list:', err);
     res.status(500).json({ error: 'Failed to fetch workflow list' });
   }
 });
 
-// GET /api/files/statuses — Distinct status codes for filter dropdown
-router.get('/files/statuses', (req, res) => {
+// ===================== MISSING-FILE ALERTS (Alerts tab) =====================
+
+// GET /api/missing-alerts — list missing-file alerts (optional ?status= filter)
+router.get('/missing-alerts', (req, res) => {
   try {
-    const statuses = trendDataService.getDistinctStatuses();
-    res.json(statuses);
+    let alerts = missingFileAlertService.getMissingFileAlerts();
+    const { status } = req.query;
+    if (status) alerts = alerts.filter(a => a.status === status);
+    const summary = missingFileAlertService.getSummary();
+    res.json({ alerts, summary, reAlertMinutes: alertStateStore.reAlertMinutes() });
   } catch (err) {
-    console.error('Error fetching file statuses:', err);
-    res.status(500).json({ error: 'Failed to fetch status list' });
+    console.error('Error fetching missing-file alerts:', err);
+    res.status(500).json({ error: 'Failed to fetch missing-file alerts' });
   }
 });
 
-// ===================== ALERTS =====================
-
-// GET /api/alerts — Alerts derived from real data
-router.get('/alerts', (req, res) => {
+// GET /api/missing-alerts/:id — full detail for one alert
+router.get('/missing-alerts/:id', (req, res) => {
   try {
-    const filters = {
-      severity: req.query.severity,
-      workflow_id: req.query.workflow_id
+    const alert = missingFileAlertService.getAlertDetail(req.params.id);
+    if (!alert) return res.status(404).json({ error: 'Alert not found' });
+    res.json(alert);
+  } catch (err) {
+    console.error('Error fetching alert detail:', err);
+    res.status(500).json({ error: 'Failed to fetch alert detail' });
+  }
+});
+
+// GET /api/missing-alerts/:id/draft — email draft rendered from the admin template
+router.get('/missing-alerts/:id/draft', (req, res) => {
+  try {
+    const a = missingFileAlertService.getAlertDetail(req.params.id);
+    if (!a) return res.status(404).json({ error: 'Alert not found' });
+
+    const tpl = settingsService.getEmail();
+    const p = a.profile || {};
+    const buyer = a.workflow_id.replace(/^ORDERS_/, '').split('_')[0];
+    const vars = {
+      buyer,
+      workflow: a.workflow_id,
+      expectedDay: a.expectedDay,
+      lastReceived: a.lastReceived,
+      avgPerDay: p.avgPerDay != null ? p.avgPerDay : '—',
+      avgFirstArrival: p.avgFirstArrivalLabel || '—'
     };
-    const alerts = trendDataService.getAlerts(filters);
-    res.json(alerts);
+    const fill = (str) => String(str || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? vars[k] : m));
+
+    // Per-workflow recipient (falls back to the general template recipient)
+    const recipient = settingsService.getRecipientFor(a.workflow_id);
+
+    res.json({
+      to: fill(recipient),
+      subject: fill(tpl.subject),
+      body: fill(tpl.body)
+    });
   } catch (err) {
-    console.error('Error fetching alerts:', err);
-    res.status(500).json({ error: 'Failed to fetch alerts' });
+    console.error('Error building draft:', err);
+    res.status(500).json({ error: 'Failed to build email draft' });
   }
 });
 
-// GET /api/alerts/stats — Alert statistics
-router.get('/alerts/stats', (req, res) => {
+// POST /api/missing-alerts/:id/send — actually send the alert email via SMTP,
+// then mark the alert "In Review". Body: { to, subject, body } (operator-edited).
+router.post('/missing-alerts/:id/send', async (req, res) => {
   try {
-    const stats = trendDataService.getAlertStats();
-    res.json(stats);
+    const a = missingFileAlertService.getAlertDetail(req.params.id);
+    if (!a) return res.status(404).json({ error: 'Alert not found' });
+
+    const emailService = require('../services/emailService');
+    const { to, subject, body } = req.body || {};
+
+    await emailService.send({ to, subject, body });
+
+    // Sent OK → move the alert to 'review' (records emailSentAt / reviewUntil).
+    const entry = alertStateStore.setStatus(req.params.id, 'review', { note: `Email sent to ${to}` });
+    res.json({
+      ok: true,
+      sentTo: to,
+      state: entry,
+      reAlertMinutes: alertStateStore.reAlertMinutes()
+    });
   } catch (err) {
-    console.error('Error fetching alert stats:', err);
-    res.status(500).json({ error: 'Failed to fetch alert statistics' });
+    console.error('Error sending alert email:', err.message);
+    // 200 with ok:false so the frontend can show the real reason inline.
+    res.status(200).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT /api/missing-alerts/:id/status — update status (review | resolved | ignored | new)
+router.put('/missing-alerts/:id/status', (req, res) => {
+  try {
+    const { status, note } = req.body || {};
+    if (!alertStateStore.VALID_STATUSES.includes(status)) {
+      return res.status(400).json({ error: `Invalid status. Must be one of: ${alertStateStore.VALID_STATUSES.join(', ')}` });
+    }
+    const existing = missingFileAlertService.getAlertDetail(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Alert not found' });
+
+    const entry = alertStateStore.setStatus(req.params.id, status, { note });
+    const updated = missingFileAlertService.getAlertDetail(req.params.id);
+    res.json({
+      ok: true,
+      state: entry,
+      alert: updated,
+      emailSimulated: status === 'review',
+      reAlertMinutes: alertStateStore.reAlertMinutes()
+    });
+  } catch (err) {
+    console.error('Error updating alert status:', err);
+    res.status(500).json({ error: 'Failed to update alert status' });
+  }
+});
+
+// POST /api/missing-alerts/:id/expire-review — TEST: fast-forward the re-alert window
+router.post('/missing-alerts/:id/expire-review', (req, res) => {
+  try {
+    const ok = alertStateStore.expireReview(req.params.id);
+    res.json({ ok, alert: missingFileAlertService.getAlertDetail(req.params.id) });
+  } catch (err) {
+    console.error('Error expiring review:', err);
+    res.status(500).json({ error: 'Failed to expire review' });
   }
 });
 
@@ -107,15 +161,11 @@ router.get('/trends/:workflow_id', (req, res) => {
     const days = parseInt(req.query.days, 10) || 30;
     const workflowId = req.params.workflow_id === 'ALL' ? null : req.params.workflow_id;
 
-    const trendData = trendDataService.getTrendData(workflowId, days);
-    const arrivalTimes = trendDataService.getArrivalTimes(workflowId, days);
-    const sizeTrend = trendDataService.getSizeTrend(workflowId, days);
-
     res.json({
       workflow_id: workflowId || 'ALL',
-      trend: trendData,
-      arrivals: arrivalTimes,
-      sizes: sizeTrend
+      trend: trendDataService.getTrendData(workflowId, days),
+      arrivals: trendDataService.getArrivalTimes(workflowId, days),
+      sizes: trendDataService.getSizeTrend(workflowId, days)
     });
   } catch (err) {
     console.error('Error fetching trends:', err);
@@ -123,106 +173,37 @@ router.get('/trends/:workflow_id', (req, res) => {
   }
 });
 
-// ===================== INSIGHTS =====================
+// ===================== ANALYSIS =====================
 
 // GET /api/workflow-analysis — Per-workflow file trend analysis
 router.get('/workflow-analysis', (req, res) => {
   try {
-    const analysis = trendDataService.getWorkflowAnalysis();
-    res.json(analysis);
+    res.json(trendDataService.getWorkflowAnalysis());
   } catch (err) {
     console.error('Error generating workflow analysis:', err);
     res.status(500).json({ error: 'Failed to generate workflow analysis' });
   }
 });
 
-// GET /api/sla-compliance — SLA compliance per workflow
-router.get('/sla-compliance', (req, res) => {
-  try {
-    const data = trendDataService.getSlaCompliance();
-    res.json(data);
-  } catch (err) {
-    console.error('Error fetching SLA compliance:', err);
-    res.status(500).json({ error: 'Failed to fetch SLA compliance' });
-  }
-});
-
-// GET /api/week-over-week — Week-over-week comparison
-router.get('/week-over-week', (req, res) => {
-  try {
-    const data = trendDataService.getWeekOverWeek();
-    res.json(data);
-  } catch (err) {
-    console.error('Error fetching week-over-week:', err);
-    res.status(500).json({ error: 'Failed to fetch week-over-week data' });
-  }
-});
-
-// GET /api/health-heatmap — Workflow health heatmap
-router.get('/health-heatmap', (req, res) => {
-  try {
-    const days = parseInt(req.query.days, 10) || 14;
-    const data = trendDataService.getHealthHeatmap(days);
-    res.json(data);
-  } catch (err) {
-    console.error('Error fetching health heatmap:', err);
-    res.status(500).json({ error: 'Failed to fetch heatmap data' });
-  }
-});
-
-// GET /api/trading-partners — Trading partner activity summary
-router.get('/trading-partners', (req, res) => {
-  try {
-    const data = trendDataService.getTradingPartnerActivity();
-    res.json(data);
-  } catch (err) {
-    console.error('Error fetching trading partners:', err);
-    res.status(500).json({ error: 'Failed to fetch trading partner data' });
-  }
-});
-
-// GET /api/anomalies — Detected anomalies
-router.get('/anomalies', (req, res) => {
-  try {
-    const anomalies = trendDataService.getAnomalies();
-    res.json(anomalies);
-  } catch (err) {
-    console.error('Error fetching anomalies:', err);
-    res.status(500).json({ error: 'Failed to fetch anomalies' });
-  }
-});
-
-// GET /api/reliability — Reliability scores per workflow
-router.get('/reliability', (req, res) => {
-  try {
-    const scores = trendDataService.getReliabilityScores();
-    res.json(scores);
-  } catch (err) {
-    console.error('Error fetching reliability:', err);
-    res.status(500).json({ error: 'Failed to fetch reliability scores' });
-  }
-});
-
-// GET /api/summary — AI summary
+// GET /api/summary — activity summary
 router.get('/summary', (req, res) => {
   try {
-    const summary = trendDataService.generateSummary();
-    res.json(summary);
+    res.json(trendDataService.generateSummary());
   } catch (err) {
     console.error('Error generating summary:', err);
     res.status(500).json({ error: 'Failed to generate summary' });
   }
 });
 
-// GET /api/predictions — AI predictions
-router.get('/predictions', (req, res) => {
-  try {
-    const predictions = trendDataService.generatePredictions();
-    res.json(predictions);
-  } catch (err) {
-    console.error('Error generating predictions:', err);
-    res.status(500).json({ error: 'Failed to generate predictions' });
-  }
+// ===================== AI ASSISTANT (Amazon Quick embed) =====================
+
+// GET /api/assistant/config — whether the Quick agent embed is configured, and its URL
+router.get('/assistant/config', (req, res) => {
+  const url = (process.env.QUICK_EMBED_URL || '').trim();
+  res.json({
+    configured: url.length > 0,
+    embedUrl: url
+  });
 });
 
 // ===================== SYSTEM =====================
@@ -231,8 +212,28 @@ router.get('/predictions', (req, res) => {
 router.get('/status', (req, res) => {
   try {
     const records = trendDataService.loadAllRecords();
+    const isDb = trendSource.source === 'db';
+    const enabled = trendSource.enabledConnections();
+
+    // Reflect the actual data source in the badge/status.
+    let provider, sourceLabel, sourceIcon;
+    if (isDb) {
+      const count = enabled.length;
+      provider = 'MSSQL Database';
+      sourceLabel = count > 1 ? `MSSQL (${count} DBs)` : 'MSSQL Database';
+      sourceIcon = '🗄️';
+    } else {
+      provider = 'eHub CSV';
+      sourceLabel = 'eHub CSV';
+      sourceIcon = '📁';
+    }
+
     res.json({
-      provider: 'eHub CSV',
+      provider,
+      source: trendSource.source,   // 'db' | 'csv'
+      sourceLabel,
+      sourceIcon,
+      connections: isDb ? enabled.map(c => c.name) : [],
       status: 'connected',
       totalRecords: records.length,
       totalWorkflows: trendDataService.getDistinctWorkflows().length,
@@ -241,6 +242,51 @@ router.get('/status', (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch status' });
+  }
+});
+
+// GET /api/trend-window — the current trend snapshot window label (public, read-only).
+router.get('/trend-window', (req, res) => {
+  try {
+    const snapStore = require('../services/trendSnapshotStore');
+    const w = snapStore.computeWindow(new Date());
+    res.json({ label: w.label, from: w.from, to: w.to, key: w.key });
+  } catch (err) {
+    res.status(200).json({ label: '' });
+  }
+});
+
+// ===================== FILE DETAILS =====================
+
+// GET /api/file-details/databases — connection names for the lookup dropdown.
+// (Admin session required; read-only, names only, no credentials.)
+router.get('/file-details/databases', requireAuth, (req, res) => {
+  try {
+    const dbs = trendSource.source === 'db'
+      ? trendSource.enabledConnections()
+          .filter(c => c.host && c.database && c.user)
+          .map(c => ({ name: c.name, client: c.client || 'mssql' }))
+      : [];
+    res.json({ source: trendSource.source, databases: dbs });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to list databases' });
+  }
+});
+
+// GET /api/file-details?db=<name>&docid=<id>&workflowid=<id>
+// Live, read-only lookup in ONE database. db is required; docid/workflowid optional.
+router.get('/file-details', requireAuth, async (req, res) => {
+  try {
+    const { db, docid, workflowid } = req.query;
+    if (!db) return res.status(400).json({ error: 'A database is required.' });
+    const data = await fileDetailsService.lookup(String(db), {
+      docid: docid != null ? String(docid) : '',
+      workflowid: workflowid != null ? String(workflowid) : ''
+    });
+    res.json(data);
+  } catch (err) {
+    console.error('File details lookup error:', err.message);
+    res.status(200).json({ error: err.message });
   }
 });
 

@@ -1,0 +1,177 @@
+========================================================================
+EMBEDDING YOUR AMAZON QUICK CHAT AGENT INTO THE DM MONITORING DASHBOARD
+Findings & recommendations — reference notes
+========================================================================
+
+GOAL
+----
+Replace the dashboard's built-in (rule-based/local) chatbot with the AI agent
+you built in Amazon Quick (Quick Suite), which has knowledge from important
+sources (its knowledge base).
+
+Direction confirmed:
+  - Embed YOUR Quick agent INTO this portal.  --> SUPPORTED.
+  - (Putting this custom chatbot INTO Amazon Quick is NOT supported — Quick is
+    a closed AWS product. So that direction is out.)
+
+
+CAN IT BE DONE?
+---------------
+Yes. AWS provides an official, ready-made sample solution for embedding a
+Quick Suite CHAT AGENT (the kind you built, with a knowledge base) into an
+external/enterprise web application.
+
+Key sources:
+  - AWS blog: "Embed Amazon Quick Suite chat agents in enterprise applications"
+    https://aws.amazon.com/blogs/machine-learning/embed-amazon-quick-suite-chat-agents-in-enterprise-applications/
+  - Sample GitHub repo (one-click CDK deploy):
+    aws-samples/sample-quicksuite-chat-embedding
+  - QuickSight embedding SDK:
+    https://github.com/awslabs/amazon-quicksight-embedding-sdk
+(Content above rephrased/summarized for licensing compliance.)
+
+
+HOW IT WORKS (the required security chain)
+-------------------------------------------
+The portal does NOT call the agent directly. Quick agents need an
+authenticated, short-lived (~5 min) embed URL. The flow:
+
+  1. User logs in via Amazon Cognito (OAuth 2.0 / OIDC).
+  2. App sends the auth code to a backend (API Gateway + Lambda).
+  3. Lambda exchanges it for JWT tokens, validates the token signature.
+  4. Lambda calls AWS STS AssumeRoleWithWebIdentity -> temporary AWS creds.
+  5. Lambda calls Quick's GenerateEmbedUrlForRegisteredUser API -> embed URL.
+  6. Frontend uses the Quick Suite Embedding SDK to render the agent in an
+     iframe (with domain restrictions).
+
+AWS ships this whole stack as a one-click CDK deploy:
+  CloudFront + Amazon Cognito + API Gateway + AWS WAF + Lambda + S3.
+
+
+PREREQUISITES (AWS side)
+------------------------
+  - An AWS account.
+  - A Quick Suite subscription with Password-based OR Single-Sign-On auth.
+  - AWS CDK CLI, AWS SDK for Python (Boto3), Node.js 20+, jq 1.7+, Docker Desktop.
+  - An AWS CLI profile with permissions to create IAM roles, CloudFront, S3,
+    API Gateway, WAF, Lambda, Cognito user pool.
+  - The portal's domain registered as an ALLOWED domain in Quick Suite.
+
+
+DEPLOY STEPS (high level, from the AWS sample)
+----------------------------------------------
+  1. Clone: aws-samples/sample-quicksuite-chat-embedding
+  2. Deploy infra:  ./setup.sh  (prompts for region, stack id, portal title,
+     AWS CLI profile)
+  3. Provision users:
+       - create Cognito user:  scripts/create_cognito_user.py
+       - create Quick user:    scripts/create_quicksuite_user.py
+  4. Share the Quick chat agent (Quick Suite console -> Chat agents -> Share)
+     to the created user.
+     IMPORTANT: also share EACH linked resource of the agent separately
+     (knowledge base, connections) or it won't fully work.
+  5. Access the CloudFront portal URL, log in, pick the agent, chat.
+  6. Cleanup when done:  ./cleanup.sh
+
+
+THE HONEST CATCH
+----------------
+This is MOSTLY an AWS INFRASTRUCTURE project, not a code change in the current
+dashboard. The current dashboard (Node/Express, local) has no AWS auth layer.
+Adding the full Cognito/CDK security stack is a significant infra effort and is
+best owned by whoever manages the AWS account (touches IAM, billing, domain
+security).
+
+
+RECOMMENDED APPROACH
+--------------------
+Step 1 — Prove it works:
+  Deploy the official AWS sample (sample-quicksuite-chat-embedding) in the AWS
+  account. This gives a working embedded-agent portal with security handled.
+  Confirm your agent embeds and answers correctly.
+
+Step 2 — Combine with the dashboard. Two realistic options:
+
+  Option A (SIMPLEST):
+    Replace the dashboard's chatbot panel with an IFRAME pointing at the
+    deployed Quick portal, OR an "Open Assistant" button that opens it.
+    Minimal change to this app.
+
+  Option B (FULLER INTEGRATION):
+    Put the dashboard behind the same Cognito login, add a backend endpoint
+    that fetches the embed URL, and render the Quick agent inline where the
+    current chatbot is. More work, seamless result.
+
+
+WHAT KIRO CAN / CANNOT DO
+-------------------------
+  CAN (portal side, once the AWS stack exists):
+    - Swap the current chatbot widget for the embed iframe.
+    - Add a small backend endpoint to fetch the embed URL.
+    - Wire the Quick Suite Embedding SDK into index.html.
+    - Add a config value (e.g. in .env) for the embed URL / portal URL.
+
+  CANNOT (must be done in your AWS environment):
+    - Provision the AWS account, Cognito, IAM roles.
+    - Deploy the CDK stack.
+    - Share the agent + knowledge base resources.
+
+
+NEXT ACTION
+-----------
+  1. You / your AWS team deploy sample-quicksuite-chat-embedding and confirm the
+     agent embeds and answers.
+  2. Bring back the deployed portal/embed details (portal URL or embed setup).
+  3. Kiro integrates it into this dashboard — most likely replacing the current
+     chatbot panel with the Quick agent.
+
+  Optional now: Kiro can add a placeholder "Assistant (Amazon Quick)" panel /
+  iframe slot + a config value for the embed URL, so it's ready to point at the
+  Quick agent once the AWS stack is deployed. (No AWS access needed for this.)
+
+
+NOTE ON THE CURRENT CHATBOT
+---------------------------
+The existing local chatbot (rule-based + optional Ollama LLM) remains fully
+functional and free. It can be kept as a fallback, or removed once the Quick
+agent is embedded. Decide during Step 2.
+========================================================================
+
+
+========================================================================
+UPDATE — PORTAL SIDE BUILT (ready for the embed URL)
+========================================================================
+
+The portal-side integration is now in place. When your AWS team provides the
+Quick agent embed/portal URL, going live is a ONE-LINE change:
+
+  1. Put the URL in .env:   QUICK_EMBED_URL=<the deployed embed/portal URL>
+  2. Restart the server.
+
+What was built (no AWS needed for this part):
+  - .env / .env.example        → QUICK_EMBED_URL setting
+  - GET /api/assistant/config  → returns { configured, embedUrl }
+  - public/js/assistant.js     → fetches config; renders the Quick agent in an
+                                 iframe when configured, else a clear
+                                 "not configured yet" message
+  - public/css/assistant.css   → floating 💬 assistant widget styling
+  - index.html                 → assistant panel markup + toggle
+
+The old local rule-based chatbot was removed (chatbotService.js, routes/chat.js,
+public/js/chatbot.js, public/css/chatbot.css) and replaced by this Quick embed.
+
+STILL REQUIRED (AWS side — your team):
+  - Deploy aws-samples/sample-quicksuite-chat-embedding
+  - Share the Quick agent + its knowledge-base resources
+  - Register the portal domain as allowed in Quick Suite
+  - Provide the embed/portal URL to put in QUICK_EMBED_URL
+
+NOTE on the embed URL type:
+  - The AWS sample produces a full portal (CloudFront URL) with its own Cognito
+    login. Simplest integration = point QUICK_EMBED_URL at that portal URL; the
+    iframe will show the Quick login then the agent.
+  - For a seamless (no second login) experience, the fuller integration is to
+    generate a per-user GenerateEmbedUrlForRegisteredUser URL on our backend —
+    that needs AWS credentials/role wired into this server and can be done as a
+    follow-up once the AWS stack exists.
+========================================================================

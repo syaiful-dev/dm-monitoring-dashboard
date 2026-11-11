@@ -258,6 +258,23 @@ body {
   height: 280px;
 }
 
+/* Documents by Workflow — fixed X-axis on top; names + bars scroll below */
+.chart-axis-fixed {
+  position: relative;
+  height: 48px;
+}
+
+.chart-scroll {
+  position: relative;
+  height: 340px;
+  overflow-y: auto;
+}
+
+.chart-scroll-inner {
+  position: relative;
+  min-height: 100%;
+}
+
 /* Tables */
 .table-container {
   overflow-x: auto;
@@ -362,6 +379,12 @@ body {
 .filter-group label {
   font-size: 0.8rem;
   color: var(--text-secondary);
+}
+
+.range-note {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 .filter-select,
@@ -757,6 +780,13 @@ body {
 
 
 /* Workflow Analysis Cards */
+.wf-analysis-empty {
+  padding: 24px 20px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
 .workflow-analysis-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -880,4 +910,405 @@ body {
 .btn-export:disabled {
   opacity: 0.5;
   cursor: wait;
+}
+
+/* Searchable Select (type-to-search combobox) */
+.ss-wrap {
+  position: relative;
+  display: inline-block;
+  min-width: 240px;
+}
+
+.ss-input {
+  width: 100%;
+  cursor: text;
+  padding-right: 28px;
+}
+
+.ss-caret {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.7rem;
+  border-radius: 0 6px 6px 0;
+}
+
+.ss-caret:hover {
+  color: var(--text-primary);
+  background: var(--bg-card-hover);
+}
+
+.ss-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.ss-item {
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ss-item:hover,
+.ss-item.active {
+  background: var(--bg-card-hover);
+}
+
+.ss-item.selected {
+  color: var(--accent-blue);
+  font-weight: 500;
+}
+
+.ss-empty {
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+/* ===================== Missing-File Alerts (Alerts tab) ===================== */
+.ma-summary {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.ma-stat {
+  flex: 1;
+  min-width: 90px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  text-align: center;
+}
+
+.ma-stat-value { font-size: 1.6rem; font-weight: 600; color: var(--text-primary); }
+.ma-stat-label { font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; }
+.ma-stat-red .ma-stat-value { color: var(--accent-red); }
+.ma-stat-blue .ma-stat-value { color: var(--accent-blue); }
+.ma-stat-green .ma-stat-value { color: var(--accent-green); }
+.ma-stat-gray .ma-stat-value { color: var(--text-secondary); }
+
+.ma-grid {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .ma-grid { grid-template-columns: 1fr; }
+}
+
+.ma-list { display: flex; flex-direction: column; gap: 8px; max-height: 620px; overflow-y: auto; }
+
+.ma-item {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent-red);
+  border-radius: 6px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.ma-item:hover { background: var(--bg-card-hover); }
+.ma-item.selected { border-color: var(--accent-blue); border-left-color: var(--accent-blue); }
+.ma-item.review { border-left-color: var(--accent-blue); }
+.ma-item.resolved { border-left-color: var(--accent-green); opacity: 0.75; }
+.ma-item.ignored { border-left-color: var(--accent-gray); opacity: 0.6; }
+
+.ma-item-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ma-item-title { font-weight: 500; font-size: 0.85rem; color: var(--text-primary); }
+.ma-item-sub { font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; }
+.ma-item-realert { font-size: 0.72rem; color: var(--accent-yellow); margin-top: 4px; }
+
+.ma-badge { font-size: 0.68rem; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.ma-badge-new { background: rgba(244, 67, 54, 0.15); color: var(--accent-red); }
+.ma-badge-review { background: rgba(79, 195, 247, 0.15); color: var(--accent-blue); }
+.ma-badge-resolved { background: rgba(76, 175, 80, 0.15); color: var(--accent-green); }
+.ma-badge-ignored { background: rgba(96, 125, 139, 0.15); color: var(--text-secondary); }
+
+.ma-placeholder { color: var(--text-secondary); text-align: center; padding: 40px 20px; }
+
+.ma-detail-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ma-detail-title { font-weight: 600; font-size: 0.95rem; color: var(--text-primary); word-break: break-all; }
+.ma-detail-msg { font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px; }
+
+.ma-review-note {
+  background: rgba(79, 195, 247, 0.1);
+  border-left: 3px solid var(--accent-blue);
+  padding: 8px 12px; border-radius: 4px;
+  font-size: 0.8rem; color: var(--text-primary); margin-bottom: 8px;
+}
+.ma-realert-note {
+  background: rgba(255, 152, 0, 0.1);
+  border-left: 3px solid var(--accent-yellow);
+  padding: 8px 12px; border-radius: 4px;
+  font-size: 0.8rem; color: var(--text-primary); margin-bottom: 8px;
+}
+
+.ma-section-title { font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 8px; }
+
+.ma-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.ma-metric { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+.ma-metric-label { font-size: 0.72rem; color: var(--text-secondary); }
+.ma-metric-value { font-size: 1.2rem; font-weight: 600; color: var(--text-primary); margin: 2px 0; }
+.ma-metric-sub { font-size: 0.7rem; color: var(--text-secondary); }
+
+.ma-pattern { font-size: 0.82rem; color: var(--text-primary); display: flex; flex-direction: column; gap: 4px; }
+
+.ma-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ma-btn {
+  padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-secondary); color: var(--text-primary);
+  font-size: 0.8rem; cursor: pointer; transition: opacity 0.15s, transform 0.15s;
+}
+.ma-btn:hover:not(:disabled) { transform: translateY(-1px); }
+.ma-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ma-btn-review { border-color: var(--accent-blue); color: var(--accent-blue); }
+.ma-btn-resolve { border-color: var(--accent-green); color: var(--accent-green); }
+.ma-btn-ignore { border-color: var(--accent-gray); }
+.ma-btn-reopen { border-color: var(--accent-yellow); color: var(--accent-yellow); }
+
+.ma-devtools { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.ma-btn-dev { font-size: 0.72rem; color: var(--text-secondary); border-style: dashed; }
+
+.ma-allclear { text-align: center; padding: 40px 20px; }
+.ma-allclear-icon { font-size: 2.5rem; }
+.ma-allclear-title { font-size: 1.1rem; font-weight: 600; color: var(--accent-green); margin-top: 8px; }
+.ma-allclear-sub { font-size: 0.82rem; color: var(--text-secondary); margin-top: 4px; }
+
+/* Email draft modal (Alerts tab) */
+.email-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.email-modal-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.email-modal-title { font-size: 1rem; color: var(--text-primary); margin-bottom: 16px; }
+
+.email-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin: 12px 0 4px;
+}
+
+.email-input,
+.email-textarea {
+  width: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  font-family: var(--font-family);
+}
+
+.email-textarea { resize: vertical; line-height: 1.5; }
+
+.email-input:focus,
+.email-textarea:focus { outline: none; border-color: var(--accent-blue); }
+
+.email-modal-actions { display: flex; gap: 8px; margin-top: 16px; }
+.email-modal-note { font-size: 0.72rem; color: var(--text-secondary); margin-top: 12px; }
+
+/* Admin link in header */
+.admin-link {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.admin-link:hover { color: var(--accent-blue); border-color: var(--accent-blue); }
+
+/* ===================== File Details tab ===================== */
+
+/* Search bar — three equal fields + an auto-width action column, all aligned. */
+.fd-search {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 14px;
+  align-items: end;
+  margin-top: 12px;
+}
+.fd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0; /* let grid columns size equally without content overflow */
+}
+.fd-field label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.fd-req { color: var(--accent-red, #f87171); font-weight: 700; }
+.fd-opt { color: var(--text-secondary); font-style: italic; font-size: 0.72rem; }
+
+/* Standardize every control to the same height & box model. */
+.fd-search .fd-field > .filter-select,
+.fd-search .fd-field > .a-input,
+.fd-search .fd-field > .ss-wrap .ss-input {
+  height: 38px;
+  box-sizing: border-box;
+  width: 100%;
+}
+/* The searchable-select wraps its input in .ss-wrap — make it fill the column
+   and match the height of the plain inputs. */
+.fd-search .fd-field > .ss-wrap { width: 100%; height: 38px; }
+
+/* Action column: the button sits on the input baseline (labels add height
+   above the inputs, so the button needs matching top offset). */
+.fd-field.fd-actions { align-self: end; }
+.fd-field.fd-actions .btn-primary { height: 38px; box-sizing: border-box; white-space: nowrap; }
+
+/* Results — reuse the Trends & Analysis card styles
+   (.workflow-analysis-card / .wf-analysis-grid / .wf-stat). Only a few
+   File-Details-specific helpers are needed on top. */
+.fd-results { margin-top: 16px; }
+.fd-empty, .fd-empty-sm {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  padding: 16px;
+  text-align: center;
+}
+.fd-empty-sm { padding: 8px; text-align: left; }
+
+/* "Document N from <db>" label above each document's boxes */
+.fd-doc-label {
+  font-size: 1.0rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 6px 0 10px;
+}
+.fd-doc-label .fd-doc-sub { font-size: 0.8rem; font-weight: 400; color: var(--text-secondary); margin-left: 6px; }
+
+/* Values rendered monospace (DOCID, CONTENTID, dates, metadata) */
+.fd-stat-value { font-family: var(--mono, monospace); word-break: break-word; }
+
+/* A long field (e.g. METADATA) spans the whole grid and wraps */
+.fd-stat-wide { grid-column: 1 / -1; }
+.fd-stat-wide .fd-stat-value { font-size: 0.82rem; white-space: pre-wrap; }
+
+@media (max-width: 640px) {
+  .fd-search { flex-direction: column; align-items: stretch; }
+  .fd-field { min-width: 0; }
+}
+
+/* ===================== Loading indicator ===================== */
+
+/* Full-screen overlay loader (dims the page while a request/action runs) */
+.app-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: none;                 /* toggled to flex by JS */
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 14, 24, 0.55);
+  backdrop-filter: blur(2px);
+}
+.app-loader.show { display: flex; }
+
+.app-loader-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 26px 34px;
+  background: var(--bg-secondary, #16233a);
+  border: 1px solid var(--border, #2b3b57);
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+}
+.app-loader-text {
+  font-size: 0.85rem;
+  color: var(--text-secondary, #a9b7cc);
+  letter-spacing: 0.02em;
+}
+
+/* The spinner — a ring with a cyan arc that rotates. Pure CSS, theme-coloured. */
+.app-spinner {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid rgba(56, 189, 248, 0.18);     /* faint track */
+  border-top-color: var(--accent-blue, #38bdf8);  /* bright arc */
+  animation: app-spin 0.8s linear infinite;
+}
+@keyframes app-spin { to { transform: rotate(360deg); } }
+
+/* Small inline spinner — for inside buttons or panels (doesn't block the page) */
+.spinner-sm {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  vertical-align: -2px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: app-spin 0.7s linear infinite;
+}
+
+/* A centered inline loader for a card/panel area (e.g. results region) */
+.loading-inline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 30px 16px;
+  color: var(--text-secondary, #a9b7cc);
+  font-size: 0.85rem;
+}
+.loading-inline .app-spinner { width: 26px; height: 26px; border-width: 3px; }
+
+/* Respect users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .app-spinner, .spinner-sm { animation-duration: 1.6s; }
 }

@@ -1,0 +1,77 @@
+/* AI Assistant — floating widget embedding the Amazon Quick agent */
+.assistant-toggle {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 150;
+  transition: transform 0.2s;
+}
+.assistant-toggle:hover { transform: scale(1.08); }
+.assistant-icon { font-size: 1.5rem; }
+
+.assistant-panel {
+  position: fixed;
+  bottom: 90px;
+  right: 24px;
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  height: 560px;
+  max-height: calc(100vh - 130px);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 150;
+}
+.assistant-panel.open { display: flex; }
+
+.assistant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+.assistant-header-left { display: flex; align-items: center; gap: 8px; }
+.assistant-avatar { font-size: 1.2rem; }
+.assistant-name { font-weight: 600; color: var(--text-primary); }
+.assistant-minimize {
+  background: transparent; border: none; color: var(--text-secondary);
+  font-size: 1.4rem; cursor: pointer; line-height: 1;
+}
+
+.assistant-body { flex: 1; position: relative; overflow: hidden; }
+.assistant-iframe { width: 100%; height: 100%; border: none; }
+
+.assistant-loading {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; color: var(--text-secondary); font-size: 0.85rem;
+}
+
+.assistant-msg {
+  padding: 32px 24px; text-align: center; color: var(--text-secondary);
+}
+.assistant-msg-icon { font-size: 2.4rem; }
+.assistant-msg-title { font-size: 1rem; color: var(--text-primary); font-weight: 600; margin-top: 10px; }
+.assistant-msg-text { font-size: 0.82rem; line-height: 1.6; margin-top: 8px; }
+.assistant-msg-text code {
+  background: var(--bg-secondary); padding: 1px 5px; border-radius: 3px; color: var(--text-primary);
+}
+
+@media (max-width: 480px) {
+  .assistant-panel { width: calc(100vw - 16px); right: 8px; bottom: 80px; }
+}
